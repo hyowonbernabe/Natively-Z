@@ -3622,6 +3622,10 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                         <p className="text-xs text-text-secondary mb-4">{t('Choose the engine that transcribes audio to text.')}</p>
 
                                         <div className="space-y-4">
+                                            <div className="bg-bg-card rounded-xl border border-border-subtle p-4 text-xs text-text-secondary space-y-2">
+                                                <p><span className="font-medium text-text-primary">English meetings:</span> choose Local Models and English. Your microphone and system model selections stay saved.</p>
+                                                <p><span className="font-medium text-text-primary">Taglish meetings:</span> choose ElevenLabs Scribe and English + Filipino (Taglish) under Language. Scribe v2 Realtime receives hints for both languages. Requires your ElevenLabs Speech-to-Text API key and uses your account credits.</p>
+                                            </div>
                                             <div className="bg-bg-card rounded-xl border border-border-subtle p-4 space-y-3">
                                                 <label className="text-xs font-medium text-text-secondary block">{t('Speech Provider')}</label>
                                                 <div className="relative">

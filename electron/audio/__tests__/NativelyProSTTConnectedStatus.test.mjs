@@ -55,7 +55,7 @@ function wireConnectedStatus(stt, sendSttStatus) {
 }
 
 test('production NativelyProSTT wiring maps handshake connected to awaiting-audio', () => {
-  const nativelyBlockMatch = /if \(stt instanceof NativelyProSTT\) \{([\s\S]*?)\n    \}/.exec(mainSource);
+  const nativelyBlockMatch = /if \(stt instanceof NativelyProSTT(?: \|\| stt instanceof ElevenLabsStreamingSTT)?\) \{([\s\S]*?)\n    \}/.exec(mainSource);
   assert.ok(nativelyBlockMatch, 'could not locate NativelyProSTT-specific wiring block in main.ts');
 
   const nativelyBlock = nativelyBlockMatch[1];

@@ -3896,7 +3896,8 @@ export class AppState {
       // restarts a LocalWhisperSTT instance, so "reconnecting" would be a lie
       // the user stares at until they end the call. Surface the actionable
       // message as a failure instead (LocalWhisperSTT.LOCAL_STT_UNAVAILABLE_CODE).
-      const isLocalSttUnavailable = (err as any)?.code === 'local_stt_unavailable';
+      const isLocalSttUnavailable = (err as any)?.code === 'local_stt_unavailable'
+        || (err as any)?.code === 'elevenlabs_stt_unavailable';
 
       if (isAuthError || isLocalSttUnavailable) {
         _consecutiveErrors = 0;
@@ -3936,6 +3937,13 @@ export class AppState {
         } as SttStatusPayload);
       }
     });
+
+    if (stt instanceof ElevenLabsStreamingSTT) {
+      stt.on('reconnecting', (info: { attempts: number }) => {
+        _lastState = 'reconnecting';
+        this.sendSttStatus({ state: 'reconnecting', provider: sttProvider, channel: speaker, reconnectAttempts: info.attempts } as SttStatusPayload);
+      });
+    }
 
     // Track successful transcripts — resets consecutive error counter
     // Broadcasts 'connected' whenever we recover from reconnecting/failed
@@ -3991,7 +3999,7 @@ export class AppState {
     // Auto language detection: NativelyProSTT emits 'languageDetected' when the
     // backend resolves the language from the first audio batch. Notify the renderer
     // so the settings UI can show what was detected.
-    if (stt instanceof NativelyProSTT) {
+    if (stt instanceof NativelyProSTT || stt instanceof ElevenLabsStreamingSTT) {
       stt.on('connected', () => {
         _consecutiveErrors = 0;
         if (_lastState !== 'connected') {

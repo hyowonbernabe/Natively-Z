@@ -13877,25 +13877,22 @@ export function initializeIpcHandlers(appState: AppState): void {
         const testWav = Buffer.concat([wavHeader, pcmData]);
 
         if (provider === 'elevenlabs') {
-          // ElevenLabs: Use /v1/voices to validate the API key (minimal scope required).
-          // Scoped keys may lack speech_to_text or user_read but still be usable once permissions are added.
-          try {
-            await axios.get('https://api.elevenlabs.io/v1/voices', {
-              headers: { 'xi-api-key': apiKey },
-              timeout: 10000,
-            });
-          } catch (elErr: any) {
-            const elStatus = elErr?.response?.data?.detail?.status;
-            // If the error is "invalid_api_key", the key itself is wrong — fail.
-            // Any other error (missing permission, etc.) means the key IS valid, just possibly scoped.
-            if (elStatus === 'invalid_api_key') {
-              throw elErr;
-            }
-            // Key is valid but scoped — pass with a warning
-            console.log(
-              '[IPC] ElevenLabs key is valid but may have restricted scopes. Saving key.',
-            );
-          }
+          // Validate the actual realtime STT scope, not the unrelated Voices API.
+          const { ElevenLabsStreamingSTT } = require('./audio/ElevenLabsStreamingSTT');
+          await new Promise<void>((resolve, reject) => {
+            const probe = new ElevenLabsStreamingSTT(apiKey);
+            const finish = (error?: Error) => {
+              clearTimeout(timer);
+              probe.stop();
+              error ? reject(error) : resolve();
+            };
+            const timer = setTimeout(() => finish(new Error('Scribe realtime connection timed out. Check network access and your Speech-to-Text key permissions.')), 18000);
+            probe.once('connected', () => finish());
+            probe.once('error', (error: Error) => finish(error));
+            probe.once('reconnecting', () => finish(new Error('Could not start a Scribe realtime session. Check your network and ElevenLabs account.')));
+            probe.setRecognitionLanguage('english-filipino');
+            probe.start(); // no microphone audio leaves the device during this test
+          });
         } else if (provider === 'azure') {
           // Azure: raw binary with subscription key
           const azureRegion = region || 'eastus';

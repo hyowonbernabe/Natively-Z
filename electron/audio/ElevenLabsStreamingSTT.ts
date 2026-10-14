@@ -1,9 +1,7 @@
 import { EventEmitter } from 'events';
 import WebSocket from 'ws';
 import { safeDetachAndClose } from './wsSafeTeardown';
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
+import { StreamingPcmResampler } from './streamingPcmResampler';
 import { RECOGNITION_LANGUAGES, TAGLISH_LANGUAGE_KEY } from '../config/languages';
 import { streamingStttWsOptions } from './dnsHelpers';
 import { RealtimeSilenceTail } from './realtimeSilenceTail';
@@ -52,7 +50,10 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
     private isSessionReady = false;
     private languageCode = 'en'; // Default to English
     
-    private debugWriteStream: fs.WriteStream | null = null;
+    private secondaryLanguages: string[] = [];
+    private readonly resampler = new StreamingPcmResampler();
+    private sessionTimer: NodeJS.Timeout | null = null;
+    private bufferedBytes = 0;
     
     // Chunk buffering properties (100ms @ 16k — see ELEVENLABS_SEND_THRESHOLD_SAMPLES)
     private pcmAccumulator: Int16Array[] = [];
@@ -63,32 +64,14 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
         format: () => ({ sampleRate: this.inputSampleRate, channels: 1 }),
         sink: (pcm) => this.sendAudio(pcm),
     });
-    // With include_timestamps the server can report one commit as both
-    // committed_transcript and committed_transcript_with_timestamps; emit it once.
-    // The two land back to back, so a short window — a speaker who genuinely
-    // repeats a phrase ("Yes." ... "Yes.") a moment later is not swallowed.
-    private lastCommittedText = '';
-    private lastCommittedAt = 0;
-    
-    private debugMessageCount = 0;
-
-    constructor(apiKey: string) {
+    constructor(apiKey: string, private readonly createSocket: (url: string, options: any) => WebSocket = (url, options) => new WebSocket(url, options)) {
         super();
         this.apiKey = apiKey;
-        
-        // Open a debug file only in development to avoid disk fill-up in production
-        if (process.env.NODE_ENV === 'development') {
-            try {
-                const debugPath = path.join(os.homedir(), 'elevenlabs_debug.raw');
-                this.debugWriteStream = fs.createWriteStream(debugPath);
-                console.log(`[ElevenLabsStreaming] Audio debug stream opened at: ${debugPath}`);
-            } catch (e) {
-                console.error('[ElevenLabsStreaming] Failed to open debug stream:', e);
-            }
-        }
     }
 
     public setSampleRate(rate: number): void {
+        if (rate === this.inputSampleRate) return;
+        this.resampler.reset(rate);
         this.inputSampleRate = rate;
         console.log(`[ElevenLabsStreaming] Input sample rate set to ${rate}Hz`);
         // We always downsample to 16000Hz for ElevenLabs
@@ -99,12 +82,14 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
 
     /** Recognition language - maps Natively key to ISO-639-1 for ElevenLabs, or 'auto' to omit code */
     public setRecognitionLanguage(key: string): void {
-        // Personal build (Natively Z): Taglish → omit the code (Scribe's smart detection); Filipino is 'fil' there.
-        const iso = key === 'auto' || key === TAGLISH_LANGUAGE_KEY ? '' : (RECOGNITION_LANGUAGES[key]?.iso639 ?? this.languageCode);
+        // Personal build: constrain Taglish language identification to Filipino and English.
+        const iso = key === TAGLISH_LANGUAGE_KEY ? 'fil' : key === 'auto' ? '' : (RECOGNITION_LANGUAGES[key]?.iso639 ?? this.languageCode);
+        const secondary = key === TAGLISH_LANGUAGE_KEY ? ['eng'] : [];
         const newCode = iso === 'tl' ? 'fil' : iso;
-        if (this.languageCode !== newCode) {
+        if (this.languageCode !== newCode || this.secondaryLanguages.join() !== secondary.join()) {
             console.log(`[ElevenLabsStreaming] Language changed: ${this.languageCode || '(auto)'} -> ${newCode || '(auto)'}`);
             this.languageCode = newCode;
+            this.secondaryLanguages = secondary;
             if (this.isActive) {
                 console.log('[ElevenLabsStreaming] Restarting session to apply new language...');
                 this.stop();
@@ -143,12 +128,11 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
         this.isConnecting = false;
         this.isSessionReady = false;
         this.buffer = [];
+        this.bufferedBytes = 0;
+        this.resampler.reset(this.inputSampleRate);
+        this.clearSessionTimer();
         this.pcmAccumulator = [];
         this.pcmAccumulatorLen = 0;
-        if (this.debugWriteStream) {
-            this.debugWriteStream.end();
-            this.debugWriteStream = null;
-        }
         console.log('[ElevenLabsStreaming] Stopped');
     }
 
@@ -211,18 +195,10 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
     }
 
     private emitCommitted(text: string): void {
-        const now = Date.now();
-        if (text === this.lastCommittedText && now - this.lastCommittedAt < 1500) return;
-        this.lastCommittedText = text;
-        this.lastCommittedAt = now;
+        // Only the primary commit is a transcript. Delayed metadata never repeats it.
         this.emit('transcript', { text, isFinal: true, confidence: 1.0 });
     }
 
-    /**
-     * Write raw PCM audio data.
-     * ElevenLabs WebSocket expects "input_audio_chunk" in base64 16-bit PCM.
-     * Note: Input from Natively DSP is 32-bit Float PCM (F32).
-     */
     public write(chunk: Buffer): void {
         if (!this.isActive) return;
         this.silenceTail.observe(chunk);
@@ -231,132 +207,100 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
 
     private sendAudio(chunk: Buffer): void {
         if (!this.isActive) return;
-
-        if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.isSessionReady) {
-            this.buffer.push(chunk);
-            if (this.buffer.length > 500) {
-                this.buffer.shift(); // Cap buffer size
-                console.warn('[ElevenLabsStreaming] Buffer full — oldest audio chunk dropped.');
-            }
-
-            if (!this.isConnecting && this.shouldReconnect && !this.reconnectTimer) {
-                console.log('[ElevenLabsStreaming] WS not ready. Lazy connecting on new audio...');
-                this.connect();
-            }
-            return;
-        }
-
-        // Snapshot ws reference before async operations to guard against concurrent close
-        const ws = this.ws;
-
+        // Convert immediately: queued samples retain their format if a device changes.
         try {
-            // The input buffer from the native module is ALREADY 16-bit PCM (Int16LE).
-            // Do NOT read it as Float32.
-            const inputS16 = new Int16Array(chunk.buffer, chunk.byteOffset, chunk.byteLength / 2);
-            
-            let outputS16: Int16Array;
-
-            if (this.inputSampleRate === this.targetSampleRate) {
-                // No downsampling needed
-                outputS16 = inputS16;
-            } else {
-                // Downsample from inputSampleRate (e.g. 48000) to 16000Hz
-                const downsampleFactor = this.inputSampleRate / this.targetSampleRate;
-                const outputLength = Math.floor(inputS16.length / downsampleFactor);
-                outputS16 = new Int16Array(outputLength);
-
-                for (let i = 0; i < outputLength; i++) {
-                    // Simple decimation (take every Nth sample)
-                    outputS16[i] = inputS16[Math.floor(i * downsampleFactor)];
-                }
-            }
-
-            // Write to debug file
-            if (this.debugWriteStream) {
-                // Use full slice args to avoid copying the whole backing ArrayBuffer
-                this.debugWriteStream.write(Buffer.from(outputS16.buffer, outputS16.byteOffset, outputS16.byteLength));
-            }
-
-            // Accumulate
-            this.pcmAccumulator.push(outputS16);
-            this.pcmAccumulatorLen += outputS16.length;
-
-            if (this.pcmAccumulatorLen >= this.SEND_THRESHOLD_SAMPLES) {
-                // Combine
-                const combined = new Int16Array(this.pcmAccumulatorLen);
-                let offset = 0;
-                for (const arr of this.pcmAccumulator) {
-                    combined.set(arr, offset);
-                    offset += arr.length;
-                }
-
-                // Reset
-                this.pcmAccumulator = [];
-                this.pcmAccumulatorLen = 0;
-
-                const base64 = Buffer.from(combined.buffer, combined.byteOffset, combined.byteLength).toString('base64');
-                // input_audio_chunk shape: see audioMessage()
-                // Use the snapshot captured earlier to avoid null-dereference from concurrent close
-                if (ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify(this.audioMessage(base64, false)));
-                }
-            }
+            const output = this.resampler.convert(chunk);
+            this.queuePcm(Buffer.from(output.buffer, output.byteOffset, output.byteLength));
         } catch (err) {
-            console.warn('[ElevenLabsStreaming] write failed:', err);
+            this.emit('warning', { code: 'invalid_audio', message: String(err) });
         }
     }
 
+    private queuePcm(pcm: Buffer): void {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.isSessionReady) {
+            this.buffer.push(pcm);
+            this.bufferedBytes += pcm.length;
+            let dropped = 0;
+            while (this.bufferedBytes > this.targetSampleRate * 2 * 10 && this.buffer.length) {
+                const old = this.buffer.shift()!;
+                this.bufferedBytes -= old.length;
+                dropped += old.length;
+            }
+            if (dropped) this.emit('warning', { code: 'audio_buffer_overflow', message: 'Connection unavailable; oldest queued audio dropped.', droppedBytes: dropped });
+            if (!this.ws && !this.isConnecting && this.shouldReconnect && !this.reconnectTimer) this.connect();
+            return;
+        }
+        // Bounded 100 ms messages, including large capture callbacks and reconnect replay.
+        const samples = new Int16Array(pcm.buffer, pcm.byteOffset, pcm.byteLength / 2);
+        this.pcmAccumulator.push(samples);
+        this.pcmAccumulatorLen += samples.length;
+        if (this.pcmAccumulatorLen < this.SEND_THRESHOLD_SAMPLES) return;
+        const combined = new Int16Array(this.pcmAccumulatorLen);
+        let offset = 0;
+        for (const part of this.pcmAccumulator) { combined.set(part, offset); offset += part.length; }
+        offset = 0;
+        while (combined.length - offset >= this.SEND_THRESHOLD_SAMPLES) {
+            const part = combined.subarray(offset, offset + this.SEND_THRESHOLD_SAMPLES);
+            this.ws.send(JSON.stringify(this.audioMessage(Buffer.from(part.buffer, part.byteOffset, part.byteLength).toString('base64'), false)));
+            offset += this.SEND_THRESHOLD_SAMPLES;
+        }
+        const remaining = combined.slice(offset);
+        this.pcmAccumulator = remaining.length ? [remaining] : [];
+        this.pcmAccumulatorLen = remaining.length;
+    }
+
+    private clearSessionTimer(): void {
+        if (this.sessionTimer) clearTimeout(this.sessionTimer);
+        this.sessionTimer = null;
+    }
+
+    private fail(code: string, message: string): void {
+        this.stop();
+        this.emit('error', Object.assign(new Error(`ElevenLabs ${code}: ${message}`), { code: 'elevenlabs_stt_unavailable' }));
+    }
+
     private connect(): void {
-        if (this.isConnecting) return;
+        if (this.isConnecting || this.ws || !this.isActive || !this.shouldReconnect) return;
         this.isConnecting = true;
         this.isSessionReady = false;
         
         console.log(`[ElevenLabsStreaming] Connecting`, { hasApiKey: Boolean(this.apiKey) });
 
         // raw WebSocket URL with parameters
-        let url = `${ELEVENLABS_WS_URL}?model_id=scribe_v2_realtime&include_timestamps=true&sample_rate=${this.targetSampleRate}`
+        let url = `${ELEVENLABS_WS_URL}?model_id=scribe_v2_realtime&audio_format=pcm_${this.targetSampleRate}`
             + `&commit_strategy=vad&vad_silence_threshold_secs=${ELEVENLABS_VAD_SILENCE_SECS}`;
         
         // Always enable language detection metadata; only pin to a specific code when one is set
         if (this.languageCode) {
             url += `&language_code=${this.languageCode}`;
         }
-        url += `&include_language_detection=true`;
+        for (const language of this.secondaryLanguages) url += `&secondary_languages=${encodeURIComponent(language)}`;
+        url += `&include_language_detection=true&keepalive_interval_ms=1000`;
         
         console.log(`[ElevenLabsStreaming] Connecting with URL: ${url.replace(this.apiKey, '***')}`);
 
         // streamingStttWsOptions: IPv4-only DNS + 15s handshake cap (dnsHelpers.ts).
-        this.ws = new WebSocket(url, streamingStttWsOptions({
+        const socket = this.createSocket(url, streamingStttWsOptions({
             headers: {
                 'xi-api-key': this.apiKey,
             },
         }) as any);
 
-        this.ws.on('open', () => {
-            // Guard: stop() calls removeAllListeners() before closing, so this handler
-            // normally won't fire after stop(). But if there's a narrow race, bail out.
-            if (!this.isActive || !this.shouldReconnect) {
-                this.ws?.close();
-                this.ws = null;
-                this.isConnecting = false;
-                return;
-            }
-            this.isConnecting = false;
-            this.reconnectAttempts = 0;
-            console.log('[ElevenLabsStreaming] Connected');
-
-            // Note: ElevenLabs requires waiting for 'session_started' before sending audio.
-            // Buffer flush happens in the 'session_started' message handler below.
+        this.ws = socket;
+        // A TCP upgrade is not a usable transcription session.
+        this.sessionTimer = setTimeout(() => {
+            if (this.ws !== socket) return;
+            socket.terminate();
+        }, 20000);
+        socket.on('open', () => {
+            if (this.ws !== socket || !this.isActive) return;
+            // Keep connecting latched until session_started, not merely socket open.
         });
 
-        this.ws.on('message', (data: WebSocket.RawData) => {
+        socket.on('message', (data: WebSocket.RawData) => {
+            if (this.ws !== socket || !this.isActive) return;
             try {
                 const rawStr = data.toString();
-                if (this.debugMessageCount < 10) {
-                    console.log(`[ElevenLabsStreaming] RAW[${this.debugMessageCount}]:`, rawStr);
-                    this.debugMessageCount++;
-                }
-
                 const msg = JSON.parse(rawStr);
 
                 // Note: The websocket API might use "type" or "message_type"
@@ -365,19 +309,24 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
                 switch (msgType) {
                     case 'session_started':
                         console.log('[ElevenLabsStreaming] Session started:', msg.config);
+                        this.clearSessionTimer();
+                        this.isConnecting = false;
                         this.isSessionReady = true;
+                        this.emit('connected');
                         
                         // Flush buffered audio now that session is strictly ready
                         while (this.buffer.length > 0) {
                             const chunk = this.buffer.shift();
                             if (chunk) {
-                                this.write(chunk);
+                                this.bufferedBytes -= chunk.length;
+                                this.queuePcm(chunk);
                             }
                         }
                         break;
 
                     case 'partial_transcript':
                         if (msg.text) {
+                            this.reconnectAttempts = 0;
                             this.emit('transcript', { 
                                 text: msg.text, 
                                 isFinal: false, 
@@ -387,34 +336,30 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
                         break;
 
                     case 'committed_transcript':
+                        if (msg.text) { this.reconnectAttempts = 0; this.emitCommitted(msg.text); }
+                        break;
                     case 'committed_transcript_with_timestamps':
-                        if (msg.text) this.emitCommitted(msg.text);
+                        if (msg.language_code) {
+                            const locale = msg.language_code === 'fil' ? 'fil-PH' : Object.values(RECOGNITION_LANGUAGES).find(lang => lang.iso639 === msg.language_code)?.bcp47;
+                            this.emit('languageDetected', locale || msg.language_code);
+                        }
                         break;
 
                     case 'auth_error':
-                        console.error('[ElevenLabsStreaming] Auth error — check key scope/permissions in ElevenLabs dashboard:', msg);
-                        this.emit('error', msg);
-                        // Stop reconnection loops for auth failures to save API credits.
-                        // Also clear any queued reconnect timer (write()'s lazy-connect or
-                        // a prior close-handler enqueue) so we don't get a stray connect()
-                        // attempt after the latch flips.
-                        this.shouldReconnect = false;
-                        if (this.reconnectTimer) {
-                            clearTimeout(this.reconnectTimer);
-                            this.reconnectTimer = null;
-                        }
-                        if (this.ws) {
-                            this.ws.close();
-                        }
+                    case 'quota_exceeded':
+                    case 'unaccepted_terms':
+                    case 'input_error':
+                    case 'invalid_request':
+                    case 'chunk_size_exceeded':
+                        this.fail(msgType, String(msg.error || 'Check your Speech-to-Text key permissions and account settings.'));
                         break;
-
+                    case 'warning':
+                        this.emit('warning', { code: 'scribe_warning', message: msg.warning });
+                        break;
                     default:
-                        // Log other messages for debugging (e.g. metadata or unknowns)
                         if (msg.error) {
-                            console.error('[ElevenLabsStreaming] Server error:', msg.error);
-                            this.emit('error', msg.error);
-                        } else {
-                            console.log('[ElevenLabsStreaming] Received message:', msgType, Object.keys(msg));
+                            this.emit('warning', { code: msgType, message: String(msg.error) });
+                            socket.close(); // close handler owns bounded retries, including code 1000
                         }
                 }
             } catch (err) {
@@ -422,13 +367,15 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
             }
         });
 
-        this.ws.on('close', (code, reason) => {
+        socket.on('close', (code, reason) => {
+            if (this.ws !== socket) return;
+            this.clearSessionTimer();
             // Null out the ws reference immediately to prevent stale reuse
             this.ws = null;
             this.isConnecting = false;
             this.isSessionReady = false;
             console.log(`[ElevenLabsStreaming] Closed: code=${code} reason=${reason}`);
-            if (this.shouldReconnect && code !== 1000) {
+            if (this.shouldReconnect) {
                 this.scheduleReconnect();
             } else {
                 // If not reconnecting, mark session as truly inactive
@@ -436,14 +383,21 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
             }
         });
 
-        this.ws.on('error', (err) => {
-            console.error('[ElevenLabsStreaming] WS error:', err);
-            this.emit('error', err);
+        socket.on('error', (err) => {
+            if (this.ws !== socket) return;
+            this.emit('warning', { code: 'socket_error', message: err.message });
+        });
+        socket.on('unexpected-response', (_request, response) => {
+            if (this.ws !== socket) return;
+            const status = response.statusCode;
+            response.resume();
+            if (status === 401 || status === 403) this.fail('authentication', `HTTP ${status}: check your API key and Speech-to-Text permission.`);
+            else socket.terminate();
         });
     }
 
     private scheduleReconnect(): void {
-        if (!this.shouldReconnect) return;
+        if (!this.shouldReconnect || this.reconnectTimer) return;
 
         if (this.reconnectAttempts >= RECONNECT_MAX_ATTEMPTS) {
             console.error(`[ElevenLabsStreaming] Max reconnect attempts (${RECONNECT_MAX_ATTEMPTS}) reached — giving up`);
@@ -451,13 +405,13 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
             // cannot resurrect the storm on the next audio chunk. start() resets
             // shouldReconnect=true so a user-triggered restart still works.
             // Mirrors the auth_error pattern at line ~317.
-            this.shouldReconnect = false;
-            this.emit('error', new Error('ElevenLabsStreamingSTT: max reconnect attempts exceeded'));
+            this.fail('connection_failed', 'Reconnect attempts exhausted. Check your connection and restart transcription.');
             return;
         }
 
         const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
         this.reconnectAttempts++;
+        this.emit('reconnecting', { attempts: this.reconnectAttempts, delay });
 
         console.log(`[ElevenLabsStreaming] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${RECONNECT_MAX_ATTEMPTS})...`);
         this.reconnectTimer = setTimeout(() => {

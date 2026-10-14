@@ -17,6 +17,21 @@ configured. The regular macOS and official release commands are unchanged.
 Personal context, API credentials, downloaded speech models, and settings remain
 local to your user data; they are not bundled into the installer or committed here.
 
+### Personal meeting transcription
+
+In Settings ? Audio, use **Local Models + English** for English meetings. For
+mixed English and Filipino, select **ElevenLabs Scribe + English + Filipino
+(Taglish)**. Local microphone/system model choices remain saved when switching.
+Scribe uses `scribe_v2_realtime`, Filipino with English as a secondary language,
+16 kHz mono PCM and automatic VAD commits. The connection test checks an actual
+realtime session without submitting microphone audio. Your ElevenLabs key needs
+Speech-to-Text permission; transcription uses your ElevenLabs account credits.
+
+Implementation follows the [realtime API reference](https://elevenlabs.io/docs/api-reference/speech-to-text/v-1-speech-to-text-realtime)
+and [commit/audio guidance](https://elevenlabs.io/docs/eleven-api/guides/how-to/speech-to-text/realtime/transcripts-and-commit-strategies).
+Automatic detection remains a separate mode. Live mixed-language accuracy still
+needs a real meeting trial; protocol tests do not establish recognition quality.
+
 # [Sponsored by Recall AI - API for desktop recording](https://docs.recall.ai/docs/desktop-sdk?utm_source=github&utm_medium=sponsorship&utm_campaign=evinjohnn-natively-ai-assistant)
 
 If you’re looking for a hosted desktop recording API, consider checking out [Recall.ai](https://docs.recall.ai/docs/desktop-sdk?utm_source=github&utm_medium=sponsorship&utm_campaign=evinjohnn-natively-ai-assistant), an API that records Zoom, Google Meet, Microsoft Teams, in-person meetings, and more.

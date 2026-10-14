@@ -206,13 +206,13 @@ describe('ElevenLabs: finals every ~0.8 s of silence, not every ~36 s of audio',
     stt.isActive = false; stt.ws = null;
   });
 
-  test('one commit reported twice (plain + with_timestamps) is ONE final', () => {
+  test('identical primary commits represent two real utterances', () => {
     const stt = new ElevenLabsStreamingSTT('k');
     const finals = [];
     stt.on('transcript', (t) => { if (t.isFinal) finals.push(t.text); });
     stt.emitCommitted('Why Postgres?');
     stt.emitCommitted('Why Postgres?');
-    assert.deepEqual(finals, ['Why Postgres?']);
+    assert.deepEqual(finals, ['Why Postgres?', 'Why Postgres?']);
     assert.match(src('electron/audio/ElevenLabsStreamingSTT.ts'), /case 'committed_transcript_with_timestamps':/);
   });
 });
