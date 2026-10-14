@@ -5,7 +5,7 @@
 // user can start talking at once. It never waits for, feeds, or replaces the main
 // answer, and any failure is silent. Design: docs/filler-design.md (workspace).
 
-import { readMyContext } from './myContext';
+import { getOutputStyleText } from './myContext';
 
 export const FILLER_HARD_STOP_MS = 6000;
 const FILLER_MAX_CHARS = 240;
@@ -185,9 +185,8 @@ export async function runFiller(input: {
     try {
         modelId = resolveFillerModel(input.helper);
         if (!modelId) return '';
-        const ctx = readMyContext();
         const { system, user } = buildFillerPrompt(question, {
-            voice: voiceFromContext(ctx),
+            voice: getOutputStyleText().slice(0, 900),
             recentLines: recent,
         });
         const signal = AbortSignal.any([input.signal, AbortSignal.timeout(FILLER_HARD_STOP_MS)]);
@@ -232,7 +231,7 @@ export interface FillerSpeedResult { modelId: string; ok: boolean; firstTokenMs?
 /** One real filler call on modelId with a sample question. Measured result also teaches Auto. */
 export async function testFillerSpeed(helper: FillerHelper, modelId: string, question = 'Tell me about a time you disagreed with a teammate.'): Promise<FillerSpeedResult> {
     if (!helper.canDispatchFillerModel(modelId)) return { modelId, ok: false, error: 'not supported for filler' };
-    const { system, user } = buildFillerPrompt(question, { voice: voiceFromContext(readMyContext()) });
+    const { system, user } = buildFillerPrompt(question, { voice: getOutputStyleText().slice(0, 900) });
     const signal = AbortSignal.timeout(20000);
     const t0 = Date.now();
     let first: number | undefined;

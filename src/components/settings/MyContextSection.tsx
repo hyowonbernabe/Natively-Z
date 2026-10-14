@@ -4,6 +4,7 @@
 import { FileText, FolderOpen, UserRound } from 'lucide-react';
 import React, { useEffect, useState } from 'react';
 import { SETTINGS_BTN, SettingsRow, SettingsSectionHeading, SettingsSwitch } from './SettingsRow';
+import { OutputStyleSection } from './OutputStyleSection';
 
 type Status = { path: string | null; enabled: boolean; exists: boolean; chars: number };
 
@@ -29,10 +30,11 @@ export const MyContextSection: React.FC = () => {
     : `${s.chars.toLocaleString()} characters loaded.`;
 
   return (
+    <>
     <section>
       <SettingsSectionHeading
         title="My Context"
-        subtitle="Use your facts when relevant. Apply your speaking style to answer wording."
+        subtitle="Your personal information, background, experiences and real examples."
       />
       <SettingsRow
         icon={<UserRound size={20} />}
@@ -45,9 +47,8 @@ export const MyContextSection: React.FC = () => {
         title="Context file"
         description={<span className="break-all">{s?.path ?? 'Loading file location…'}</span>}
       >
-          <p className="pb-3 text-xs text-muted-foreground">Add a “How I sound” section for vocabulary, tone and example answers. These become speaking instructions, separate from your background facts.</p>
           <div className="flex flex-wrap gap-2 pb-3">
-            <button type="button" className={SETTINGS_BTN} onClick={() => { void window.electronAPI.openMyContext?.().then(refresh); }}>
+            <button type="button" className={SETTINGS_BTN} onClick={() => { void window.electronAPI.openMyContext?.().then(refresh).catch(() => {}); }}>
               <FileText size={14} /> Edit file
             </button>
             <button type="button" className={SETTINGS_BTN} onClick={() => { void window.electronAPI.showMyContext?.(); }}>
@@ -56,5 +57,7 @@ export const MyContextSection: React.FC = () => {
           </div>
       </SettingsRow>
     </section>
+    <OutputStyleSection />
+    </>
   );
 };

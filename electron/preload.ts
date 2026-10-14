@@ -624,6 +624,8 @@ interface ElectronAPI {
   setContextDebugLevel: (level: 'off' | 'standard' | 'verbose') => Promise<{ ok: boolean; error?: string }>;
   openContextDebugFolder: () => Promise<{ ok: boolean; error?: string }>;
   getMyContext: () => Promise<{ path: string | null; enabled: boolean; exists: boolean; chars: number }>;
+  getOutputStyle: () => Promise<import('./llm/myContext').OutputStyleConfig>;
+  setOutputStyle: (config: import('./llm/myContext').OutputStyleConfig) => Promise<import('./llm/myContext').OutputStyleConfig>;
   getMockInterview: () => Promise<InterviewState>;
   getMockInterviewHistory: () => Promise<InterviewSession[]>;
   startMockInterview: (options: Partial<InterviewOptions>) => Promise<InterviewResult>;
@@ -2290,6 +2292,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setContextDebugLevel: (level: 'off' | 'standard' | 'verbose') => ipcRenderer.invoke('context-debug:set-level', { level }),
   openContextDebugFolder: () => ipcRenderer.invoke('context-debug:open-folder'),
   getMyContext: () => ipcRenderer.invoke('my-context:get'),
+  getOutputStyle: () => ipcRenderer.invoke('output-style:get'),
+  setOutputStyle: (config) => ipcRenderer.invoke('output-style:set', config),
   getMockInterview: () => ipcRenderer.invoke('mock-interview:get'),
   getMockInterviewHistory: () => ipcRenderer.invoke('mock-interview:history'),
   startMockInterview: (options) => ipcRenderer.invoke('mock-interview:start', options),

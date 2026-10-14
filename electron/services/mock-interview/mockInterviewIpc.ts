@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { AppState } from '../../main';
-import { readMyContext, splitMyContext } from '../../llm/myContext';
+import { getOutputStyleText } from '../../llm/myContext';
 import { MockInterviewService } from './MockInterviewService';
 import { InterviewSpeech } from './InterviewSpeech';
 import { interviewMarkdown } from './interviewPolicy';
@@ -26,7 +26,7 @@ export function registerMockInterviewIpc(appState: AppState, safeHandle: (channe
         finalizeMicrophone: () => { appState.finalizeMicSTT(); },
         speak: (text, signal) => speech.speak(text, signal),
         cancelSpeech: () => speech.cancel(),
-        voice: () => splitMyContext(readMyContext()).voice,
+        voice: () => getOutputStyleText(),
     });
     service.on('changed', state => {
         appState.mockInterviewTranscriptObserver = state.microphoneActive ? segment => service.transcript(segment) : null;

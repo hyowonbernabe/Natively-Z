@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dist = (rel) => pathToFileURL(path.resolve(here, '../../../dist-electron/electron', rel)).href;
-const { readMyContext, selectMyContext, buildMyContextBlock, splitMyContext, renderMyContextBlock, MY_CONTEXT_MAX_CHARS } = await import(dist('llm/myContext.js'));
+const { readMyContext, selectMyContext, buildMyContextBlock, splitMyContext, renderMyContextBlock, resolveOutputStyleConfig, MY_CONTEXT_MAX_CHARS } = await import(dist('llm/myContext.js'));
 
 const FILE = `# Me
 My name is Hyowon. I built Messenger Z.
@@ -100,7 +100,7 @@ Why AI: because.
 
 test('speaking preferences become answer instructions, separate from factual grounding', () => {
   const text = '# Me\nI built Messenger Z.\n\n## How to answer for me\nUse simple words.\n\n## Quick answers\nWhy AI: I enjoy building.';
-  const block = renderMyContextBlock(text, 'Explain how rain forms.');
+  const block = renderMyContextBlock(text, 'Explain how rain forms.', false, false, splitMyContext(text).voice);
   const [background, style] = block.split('<user_response_style>');
   assert.match(background, /I built Messenger Z/);
   assert.doesNotMatch(background, /Use simple words/);
@@ -112,7 +112,7 @@ test('speaking preferences become answer instructions, separate from factual gro
 
 test('voice survives oversized background and late placement in the document', () => {
   const text = `# Me\n${'Background fact. '.repeat(1500)}\n\n## How I sound\nKeep it conversational.`;
-  const block = renderMyContextBlock(text, 'What is caching?');
+  const block = renderMyContextBlock(text, 'What is caching?', false, false, splitMyContext(text).voice);
   assert.match(block, /<user_response_style>[\s\S]*Keep it conversational\./);
   const parts = splitMyContext(text);
   const content = selectMyContext(parts.facts, '', MY_CONTEXT_MAX_CHARS - parts.voice.length).content;
@@ -130,11 +130,35 @@ test('stories mentioning speaking remain evidence; multiple style headings and C
 
 test('voice-only coding path excludes biography and stories, retains precision and format', () => {
   const text = `${FILE}\n## How I sound\nPlain words.`;
-  const block = renderMyContextBlock(text, '', true);
+  const block = renderMyContextBlock(text, '', true, false, 'Plain words.');
   assert.match(block, /^<user_response_style>/);
   assert.doesNotMatch(block, /Messenger Z|sharded Postgres|user_personal_context/);
   assert.match(block, /necessary technical precision/);
   assert.match(block, /explicit code, JSON or other output formats/);
+});
+
+test('Output Style controls wording without a context file or personal facts', () => {
+  const block = renderMyContextBlock('', 'Explain caching.', false, false, 'Use short sentences and everyday words.');
+  assert.match(block, /<user_response_style>/);
+  assert.match(block, /Use short sentences and everyday words/);
+  assert.doesNotMatch(block, /<user_personal_context>/);
+});
+
+test('saved Output Style replaces legacy voice; blank/disabled choices never restore it', () => {
+  const text = `${FILE}\n## How I sound\nUse long, technical sentences.`;
+  const block = renderMyContextBlock(text, 'q', false, false, 'Use simple words.');
+  assert.match(block, /Use simple words/);
+  assert.doesNotMatch(block, /Use long, technical sentences/);
+  assert.doesNotMatch(renderMyContextBlock(text, 'q'), /<user_response_style>/);
+  assert.deepEqual(resolveOutputStyleConfig({ text: '', enabled: true }, 'Legacy voice'), { text: '', enabled: true });
+  assert.deepEqual(resolveOutputStyleConfig({ text: 'Saved voice', enabled: false }, 'Legacy voice'), { text: 'Saved voice', enabled: false });
+});
+
+test('legacy instructions seed only an unset Output Style; later context changes do not replace saved preferences', () => {
+  const migrated = resolveOutputStyleConfig(undefined, 'Keep it conversational.');
+  assert.deepEqual(migrated, { text: 'Keep it conversational.', enabled: true });
+  assert.deepEqual(resolveOutputStyleConfig(migrated, 'Now use a different voice.'), migrated);
+  assert.deepEqual(resolveOutputStyleConfig(undefined, ''), { text: '', enabled: true });
 });
 
 test('no style section means no added speaking policy; empty and disabled context stay empty', () => {

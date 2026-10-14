@@ -11,6 +11,9 @@
 //   `Tags:` line) are added.
 //
 // Missing / empty file, or NATIVELY_MY_CONTEXT=0 → '' → prompts unchanged.
+// Output Style is independent: legacy voice headings seed its saved setting
+// once, then are excluded from personal facts. An explicitly saved style can
+// still apply when the context file is absent or disabled.
 
 import fs from 'fs';
 import path from 'path';
@@ -18,6 +21,35 @@ import path from 'path';
 export const MY_CONTEXT_FILE = 'my-context.md';
 export const MY_CONTEXT_MAX_CHARS = 10000;
 export const MAX_STORIES = 3;
+export const OUTPUT_STYLE_MAX_CHARS = 10000;
+export interface OutputStyleConfig { text: string; enabled: boolean }
+
+export function resolveOutputStyleConfig(saved: unknown, legacyVoice = ''): OutputStyleConfig {
+    if (saved === undefined) return { text: legacyVoice, enabled: true };
+    if (saved && typeof saved === 'object' && typeof (saved as OutputStyleConfig).text === 'string') {
+        return { text: (saved as OutputStyleConfig).text, enabled: (saved as OutputStyleConfig).enabled !== false };
+    }
+    return { text: '', enabled: true };
+}
+
+export function getOutputStyle(): OutputStyleConfig {
+    try {
+        const { SettingsManager } = require('../services/SettingsManager');
+        const settings = SettingsManager.getInstance();
+        const saved = settings.get('outputStyle');
+        const legacyVoice = saved === undefined ? splitMyContext(readMyContext()).voice : '';
+        const config = resolveOutputStyleConfig(saved, legacyVoice);
+        // Copy the existing preferences once; later context edits never overwrite
+        // this field, and an explicitly blank or disabled style stays that way.
+        if (saved === undefined && config.text && config.text.length <= OUTPUT_STYLE_MAX_CHARS) settings.set('outputStyle', config);
+        return config;
+    } catch { return { text: '', enabled: true }; }
+}
+
+export function getOutputStyleText(): string {
+    const config = getOutputStyle();
+    return config.enabled ? config.text.trim().slice(0, OUTPUT_STYLE_MAX_CHARS) : '';
+}
 
 const STOP = new Set('a an and are as at be but by can did do does for from had has have how i if in is it its me my of on or our so than that the their them then there they this to was we were what when where which who why will with you your about tell describe give time'.split(' '));
 
@@ -48,17 +80,13 @@ export function isMyContextEnabled(): boolean {
 const TEMPLATE = `# My Context
 
 Everything above the first "## Story:" heading (and any other "## " section that isn't a story)
-is sent with every answer. Keep it short: who you are, core facts, how you like to sound.
+is sent with every answer. Keep it short: who you are, core facts, and real experiences.
+Set vocabulary, tone and speaking instructions in Settings → Intelligence → Output Style.
 
 ## Who I am
 - Name:
 - What I do:
 - Key projects:
-
-## How I sound
-- Use everyday words, short sentences and natural contractions.
-- Explain ideas plainly. Avoid jargon; explain necessary technical terms briefly.
-- e.g. direct, warm, concrete numbers over adjectives
 
 ## Story: Disagreement / conflict with a teammate
 Tags: disagreement, conflict, pushing back, teamwork
@@ -69,6 +97,16 @@ What happened, what I did, how it ended.
 `;
 
 export function registerMyContextIpc(safeHandle: (channel: string, fn: (...args: any[]) => any) => void): void {
+    safeHandle('output-style:get', () => getOutputStyle());
+    safeHandle('output-style:set', (_event: unknown, config: OutputStyleConfig) => {
+        if (!config || typeof config.text !== 'string' || typeof config.enabled !== 'boolean' || config.text.length > OUTPUT_STYLE_MAX_CHARS) {
+            throw new Error(`Output Style must contain at most ${OUTPUT_STYLE_MAX_CHARS.toLocaleString()} characters.`);
+        }
+        const { SettingsManager } = require('../services/SettingsManager');
+        const next = { text: config.text, enabled: config.enabled };
+        if (!SettingsManager.getInstance().set('outputStyle', next)) throw new Error('Could not save Output Style. Please try again.');
+        return next;
+    });
     const status = () => {
         const file = myContextPath();
         const text = file ? readMyContext(file) : '';
@@ -207,7 +245,7 @@ function voiceInstructions(voice: string): string {
     return [
         '<user_response_style>',
         'Apply these user-provided speaking instructions to the wording of every natural-language answer, even when the question is unrelated to their background. They are instructions for HOW to answer, not facts to quote or summarize.',
-        'Prefer everyday words, short sentences and natural contractions. Explain ideas plainly; avoid jargon and acronyms unless necessary, and explain necessary terms briefly. Preserve meaning and accuracy; do not invent expertise or personal experience.',
+        'Follow the vocabulary, tone, sentence length and detail requested below. Preserve meaning and accuracy; do not invent expertise or personal experience.',
         'Preserve safety rules, the requested language, necessary technical precision, and explicit code, JSON or other output formats. Apply the style to explanations, not code or structured data. Respect requested detail and do not add an introduction or acknowledgement merely to sound conversational.',
         '',
         voice.replace(/<\/?(?:user_personal_context|user_response_style)>/gi, ''),
@@ -215,8 +253,9 @@ function voiceInstructions(voice: string): string {
     ].join('\n');
 }
 
-export function renderMyContextBlock(text: string, question: string, voiceOnly = false, log = false): string {
-    const { facts, voice } = splitMyContext(text);
+export function renderMyContextBlock(text: string, question: string, voiceOnly = false, log = false, outputStyle = ''): string {
+    const { facts } = splitMyContext(text);
+    const voice = outputStyle;
     const cappedVoice = voice.slice(0, MY_CONTEXT_MAX_CHARS);
     const { content, stories } = voiceOnly
         ? { content: '', stories: [] }
@@ -235,14 +274,14 @@ export function renderMyContextBlock(text: string, question: string, voiceOnly =
 }
 
 export function buildMyContextBlock(question: string, file?: string | null, log = true): string {
-    return renderMyContextBlock(readMyContext(file === undefined ? myContextPath() : file), question, false, log);
+    return renderMyContextBlock(readMyContext(file === undefined ? myContextPath() : file), question, false, log, getOutputStyleText());
 }
 
 // Coding/safety routes retain their existing fact exclusion, but can still use
 // the user's wording preferences without changing their output contracts.
 export function withMyVoice(systemPrompt: string): string {
     try {
-        const block = renderMyContextBlock(readMyContext(), '', true);
+        const block = renderMyContextBlock('', '', true, false, getOutputStyleText());
         return block ? `${systemPrompt}\n\n${block}` : systemPrompt;
     } catch {
         return systemPrompt;
