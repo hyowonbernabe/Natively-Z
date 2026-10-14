@@ -625,6 +625,8 @@ interface ElectronAPI {
   setContextDebugLevel: (level: 'off' | 'standard' | 'verbose') => Promise<{ ok: boolean; error?: string }>;
   openContextDebugFolder: () => Promise<{ ok: boolean; error?: string }>;
   getMyContext: () => Promise<{ path: string | null; enabled: boolean; exists: boolean; chars: number }>;
+  getStoryPriorities: () => Promise<{ stories: string[]; priorities: import('./llm/myContext').StoryPriorities }>;
+  setStoryPriorities: (priorities: import('./llm/myContext').StoryPriorities) => Promise<{ stories: string[]; priorities: import('./llm/myContext').StoryPriorities }>;
   getOutputStyle: () => Promise<import('./llm/myContext').OutputStyleConfig>;
   setOutputStyle: (config: import('./llm/myContext').OutputStyleConfig) => Promise<import('./llm/myContext').OutputStyleConfig>;
   getMockInterview: () => Promise<InterviewState>;
@@ -2294,6 +2296,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setContextDebugLevel: (level: 'off' | 'standard' | 'verbose') => ipcRenderer.invoke('context-debug:set-level', { level }),
   openContextDebugFolder: () => ipcRenderer.invoke('context-debug:open-folder'),
   getMyContext: () => ipcRenderer.invoke('my-context:get'),
+  getStoryPriorities: () => ipcRenderer.invoke('my-context:priorities:get'),
+  setStoryPriorities: (priorities) => ipcRenderer.invoke('my-context:priorities:set', priorities),
   getOutputStyle: () => ipcRenderer.invoke('output-style:get'),
   setOutputStyle: (config) => ipcRenderer.invoke('output-style:set', config),
   getMockInterview: () => ipcRenderer.invoke('mock-interview:get'),

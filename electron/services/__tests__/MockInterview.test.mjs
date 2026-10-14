@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { MockInterviewService } = require('../../../dist-electron/electron/services/mock-interview/MockInterviewService.js');
 const { speechCommand } = require('../../../dist-electron/electron/services/mock-interview/InterviewSpeech.js');
-const { interviewMarkdown, interviewOptions } = require('../../../dist-electron/electron/services/mock-interview/interviewPolicy.js');
+const { interviewMarkdown, interviewOptions, questionPrompt } = require('../../../dist-electron/electron/services/mock-interview/interviewPolicy.js');
 
 function fixture(t, overrides = {}) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'natively-mock-test-'));
@@ -295,4 +295,24 @@ test('storage failure still stops owned capture and preserves a transcript in me
     assert.equal(f.service.snapshot().microphoneActive, false);
     assert.equal(f.service.snapshot().session.status, 'completed');
     assert.match(interviewMarkdown(f.service.snapshot().session), /My answer should remain available/);
+});
+
+
+test('personal mode supports no role and asks general conversational questions', () => {
+  const options = interviewOptions({ focus: 'personal', role: '' });
+  assert.equal(options.focus, 'personal');
+  assert.equal(options.role, 'Personal introduction practice');
+  const prompt = questionPrompt({ options, turns: [] });
+  assert.match(prompt.system, /Tell me about yourself/);
+  assert.match(prompt.system, /nontechnical/);
+  assert.match(prompt.system, /Do not ask coding questions/);
+  assert.equal(JSON.parse(prompt.user).questionNumber, 1);
+  assert.throws(() => interviewOptions({ focus: 'technical', role: '' }));
+});
+test('personal practice retains spoken automatic progression and saved focus', async t => {
+  const f = fixture(t);
+  await f.service.start({ focus: 'personal', role: '', questions: 2 });
+  assert.match(f.calls.generated[0].system, /personal\/general interview practice/);
+  assert.equal(f.service.snapshot().session.options.autoAdvance, true);
+  assert.equal(f.service.snapshot().session.options.focus, 'personal');
 });

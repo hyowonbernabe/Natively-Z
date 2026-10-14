@@ -8,6 +8,8 @@ export interface AppSettings {
     calendarFirstNameMigratedFor?: string;
     /** Personal build (Natively Z): My Context on/off. Undefined = on. */
     myContextEnabled?: boolean;
+    /** Personal build: story selection preferences, separate from the context file. */
+    myContextStoryPriorities?: Record<string, 'preferred' | 'normal' | 'lower'>;
     /** Personal build: speaking instructions saved independently of personal facts. */
     outputStyle?: { text: string; enabled: boolean };
     /** Personal build (Natively Z): filler model — 'auto' (default), 'off', or a model id. */

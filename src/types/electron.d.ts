@@ -793,6 +793,8 @@ export interface ElectronAPI {
   setContextDebugLevel: (level: 'off' | 'standard' | 'verbose') => Promise<{ ok: boolean; error?: string }>
   openContextDebugFolder: () => Promise<{ ok: boolean; error?: string }>
   getMyContext: () => Promise<{ path: string | null; enabled: boolean; exists: boolean; chars: number }>
+  getStoryPriorities: () => Promise<{ stories: string[]; priorities: import('../../electron/llm/myContext').StoryPriorities }>;
+  setStoryPriorities: (priorities: import('../../electron/llm/myContext').StoryPriorities) => Promise<{ stories: string[]; priorities: import('../../electron/llm/myContext').StoryPriorities }>;
   getOutputStyle: () => Promise<import('../../electron/llm/myContext').OutputStyleConfig>
   setOutputStyle: (config: import('../../electron/llm/myContext').OutputStyleConfig) => Promise<import('../../electron/llm/myContext').OutputStyleConfig>
   getMockInterview: () => Promise<import('../../electron/services/mock-interview/types').InterviewState>

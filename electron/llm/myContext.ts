@@ -22,6 +22,27 @@ export const MY_CONTEXT_FILE = 'my-context.md';
 export const MY_CONTEXT_MAX_CHARS = 10000;
 export const MAX_STORIES = 3;
 export const OUTPUT_STYLE_MAX_CHARS = 10000;
+export type StoryPriority = 'preferred' | 'normal' | 'lower';
+export type StoryPriorities = Record<string, StoryPriority>;
+export function contextStories(text: string): string[] {
+    return [...new Set([...text.matchAll(/^##\s+Story:\s*(.+)$/gim)].map(m => m[1].trim()))];
+}
+export function validateStoryPriorities(input: unknown): StoryPriorities {
+    if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length > 200) throw new Error('Invalid story priorities.');
+    const next: StoryPriorities = Object.create(null);
+    for (const [title, value] of Object.entries(input)) {
+        if (!title.trim() || title.length > 500 || !['preferred', 'normal', 'lower'].includes(String(value))) throw new Error('Invalid story priority.');
+        next[title] = value as StoryPriority;
+    }
+    return next;
+}
+function getStoryPriorities(): StoryPriorities {
+    try {
+        const { SettingsManager } = require('../services/SettingsManager');
+        return validateStoryPriorities(SettingsManager.getInstance().get('myContextStoryPriorities') || {});
+    } catch { return {}; }
+}
+
 export interface OutputStyleConfig { text: string; enabled: boolean }
 
 export function resolveOutputStyleConfig(saved: unknown, legacyVoice = ''): OutputStyleConfig {
@@ -113,6 +134,14 @@ export function registerMyContextIpc(safeHandle: (channel: string, fn: (...args:
         return { path: file, enabled: isMyContextEnabled(), exists: Boolean(file && fs.existsSync(file)), chars: text.length };
     };
     safeHandle('my-context:get', () => status());
+    const prioritiesStatus = () => ({ stories: contextStories(readMyContext()), priorities: getStoryPriorities() });
+    safeHandle('my-context:priorities:get', prioritiesStatus);
+    safeHandle('my-context:priorities:set', (_event: unknown, input: unknown) => {
+        const next = validateStoryPriorities(input);
+        const { SettingsManager } = require('../services/SettingsManager');
+        if (!SettingsManager.getInstance().set('myContextStoryPriorities', next)) throw new Error('Could not save story priorities. Please try again.');
+        return prioritiesStatus();
+    });
     safeHandle('my-context:set-enabled', (_e: unknown, enabled: boolean) => {
         try {
             // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -186,15 +215,22 @@ const STORY_RE = /^##\s+Story:\s*(.*)$/im;
 
 // Every "## " section that is not a "## Story:" (plus the preamble) is pinned: always sent.
 // Stories are ranked by question overlap with title + "Tags:" line (x3) and body (x1); top MAX_STORIES that fit.
-export function selectMyContext(text: string, question: string, maxChars = MY_CONTEXT_MAX_CHARS): { content: string; stories: string[] } {
+export function selectMyContext(text: string, question: string, maxChars = MY_CONTEXT_MAX_CHARS, priorities: StoryPriorities = {}): { content: string; stories: string[] } {
     const trimmed = (text || '').trim();
     if (!trimmed) return { content: '', stories: [] };
 
     const sections = trimmed.split(/^(?=##\s)/m).map(x => x.trim()).filter(Boolean);
     const storySecs = sections.filter(x => STORY_RE.test(x.split('\n')[0]));
     const titleOf = (x: string) => (x.match(STORY_RE)?.[1] || '').trim();
+    const hasPreferences = storySecs.some(body => priorities[titleOf(body)] && priorities[titleOf(body)] !== 'normal');
     // Whole file fits → send all of it; ranking only matters when over the cap.
-    if (trimmed.length <= maxChars) return { content: trimmed, stories: storySecs.map(titleOf) };
+    if (trimmed.length <= maxChars && !hasPreferences) return { content: trimmed, stories: storySecs.map(titleOf) };
+
+    if (trimmed.length <= maxChars) {
+        const weight = (body: string) => priorities[titleOf(body)] === 'preferred' ? 4 : priorities[titleOf(body)] === 'lower' ? 0.25 : 1;
+        const ordered = [...storySecs].sort((a, b) => weight(b) - weight(a));
+        return { content: [...sections.filter(x => !storySecs.includes(x)), ...ordered].join('\n\n'), stories: ordered.map(titleOf) };
+    }
 
     const pinned = sections.filter(x => !storySecs.includes(x)).join('\n\n');
     if (pinned.length >= maxChars) return { content: pinned.slice(0, maxChars), stories: [] };
@@ -211,10 +247,15 @@ export function selectMyContext(text: string, question: string, maxChars = MY_CO
                 if (keyWords.has(w)) score += 3;
                 else if (bodyWords.has(w)) score += 1;
             }
-            return { body, title, score, i };
+            // Literal project names override weights for a direct question about that project.
+            const names = [...(title.match(/\b[A-Z][\w]*(?:[ -]+[A-Z][\w]*)+\b/g) || []), ...(title.match(/\b[A-Z][a-z]+[A-Z][\w]*\b/g) || [])];
+            const direct = names.some(name => (question || '').toLowerCase().includes(name.toLowerCase()));
+            const weight = priorities[title] === 'preferred' ? 4 : priorities[title] === 'lower' ? 0.25 : 1;
+            return { body, title, score: direct ? 10000 + score : score * weight, weight, i };
+
         })
-        .filter(s => s.score > 0)
-        .sort((a, b) => b.score - a.score || a.i - b.i);
+        .filter(s => s.score > 0 || (hasPreferences && s.weight > 1))
+        .sort((a, b) => b.score - a.score || b.weight - a.weight || a.i - b.i);
 
     let content = pinned;
     const stories: string[] = [];
@@ -259,13 +300,13 @@ export function withOutputStyleSystemPrompt(prompt: string, style = getOutputSty
         ? `${prompt}\n\n${voiceInstructions(style)}` : prompt;
 }
 
-export function renderMyContextBlock(text: string, question: string, voiceOnly = false, log = false, outputStyle = ''): string {
+export function renderMyContextBlock(text: string, question: string, voiceOnly = false, log = false, outputStyle = '', priorities: StoryPriorities = {}): string {
     const { facts } = splitMyContext(text);
     const voice = outputStyle;
     const cappedVoice = voice.slice(0, MY_CONTEXT_MAX_CHARS);
     const { content, stories } = voiceOnly
         ? { content: '', stories: [] }
-        : selectMyContext(facts, question, MY_CONTEXT_MAX_CHARS - cappedVoice.length);
+        : selectMyContext(facts, question, MY_CONTEXT_MAX_CHARS - cappedVoice.length, priorities);
     if (!content && !cappedVoice) return '';
     if (log) console.log(`[MyContext] facts ${content.length} chars; style ${cappedVoice.length} chars; stories: ${stories.length ? stories.join(' | ') : '(none matched)'}`);
     const background = content ? [
@@ -276,11 +317,18 @@ export function renderMyContextBlock(text: string, question: string, voiceOnly =
         content.replace(/<\/?(?:user_personal_context|user_response_style)>/gi, ''),
         '</user_personal_context>',
     ].join('\n') : '';
-    return [background, voiceInstructions(cappedVoice)].filter(Boolean).join('\n\n');
+    const activePreferences = stories.filter(title => priorities[title] && priorities[title] !== 'normal');
+    const preferences = content && activePreferences.length ? [
+        '<user_story_preferences>',
+        'These are the user?s preferences for choosing examples, not additional personal facts. For broad project or experience questions, choose a relevant preferred example ahead of normal or lower-priority examples. Lower priority means use less often, not forbidden. A question explicitly naming a project takes precedence. Never force an irrelevant example or invent facts to make a preferred story fit. Explain the chosen project in plain language before describing the work.',
+        JSON.stringify(activePreferences.map(title => ({ story: title, priority: priorities[title] }))),
+        '</user_story_preferences>',
+    ].join('\n') : '';
+    return [background, preferences, voiceInstructions(cappedVoice)].filter(Boolean).join('\n\n');
 }
 
 export function buildMyContextBlock(question: string, file?: string | null, log = true): string {
-    return renderMyContextBlock(readMyContext(file === undefined ? myContextPath() : file), question, false, log, getOutputStyleText());
+    return renderMyContextBlock(readMyContext(file === undefined ? myContextPath() : file), question, false, log, getOutputStyleText(), getStoryPriorities());
 }
 
 // Coding/safety routes retain their existing fact exclusion, but can still use

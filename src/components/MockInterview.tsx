@@ -28,12 +28,13 @@ function InterviewSetup({ options, setOptions, history, busy, onStart, onLoad }:
 }) {
     return (
     <form className="space-y-4" onSubmit={event => { event.preventDefault(); onStart(); }}>
-        <label className="block space-y-2 text-sm">Role<input className={field} value={options.role} maxLength={300} onChange={event => setOptions({ ...options, role: event.target.value })} required /></label>
+        <label className="block space-y-2 text-sm">Role{options.focus === 'personal' ? ' (optional)' : ''}<input className={field} value={options.role} maxLength={300} onChange={event => setOptions({ ...options, role: event.target.value })} required={options.focus !== 'personal'} /></label>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <label className="space-y-2 text-sm">Focus<select className={field} value={options.focus} onChange={event => setOptions({ ...options, focus: event.target.value as InterviewOptions['focus'] })}><option value="mixed">Mixed</option><option value="behavioral">Experience & teamwork</option><option value="technical">Technical</option></select></label>
+            <label className="space-y-2 text-sm">Focus<select className={field} value={options.focus} onChange={event => setOptions({ ...options, focus: event.target.value as InterviewOptions['focus'] })}><option value="personal">Personal & general</option><option value="mixed">Mixed</option><option value="behavioral">Experience & teamwork</option><option value="technical">Technical</option></select></label>
             <label className="space-y-2 text-sm">Language<select className={field} value={options.language} onChange={event => setOptions({ ...options, language: event.target.value as InterviewOptions['language'] })}><option>English</option><option>Filipino</option><option>English and Filipino</option></select></label>
             <label className="space-y-2 text-sm">Questions<select className={field} value={options.questions} onChange={event => setOptions({ ...options, questions: Number(event.target.value) })}>{[3, 5, 8, 10].map(count => <option key={count} value={count}>{count}</option>)}</select></label>
         </div>
+        {options.focus === 'personal' && <p className="text-sm text-text-secondary">Practice introducing yourself, your interests, strengths, motivation and goals. Conversational questions, without technical quizzes.</p>}
         <div className="space-y-3 rounded-xl border border-border-subtle bg-bg-primary p-4 text-sm">
             <label className="flex items-center gap-3"><input type="checkbox" checked={options.microphone} onChange={event => setOptions({ ...options, microphone: event.target.checked })} />Use my microphone for answers</label>
             <label className="flex items-center gap-3"><input type="checkbox" checked={options.spoken} onChange={event => setOptions({ ...options, spoken: event.target.checked })} />Read questions aloud</label>
@@ -41,7 +42,7 @@ function InterviewSetup({ options, setOptions, history, busy, onStart, onLoad }:
             <label className="flex items-center gap-3">Pause length<select className={`${field} !w-auto`} value={options.pauseSeconds} onChange={event => setOptions({ ...options, pauseSeconds: Number(event.target.value) })}>{[3, 5, 7, 10].map(seconds => <option key={seconds} value={seconds}>{seconds} seconds</option>)}</select></label>
         </div>
         <p className="text-xs leading-relaxed text-text-secondary">Uses your selected AI model and a built-in system voice. Questions play through your default output device. Headphones keep the interviewer’s speech out of your microphone. Microphone practice starts its own meeting; typed practice can run without one.</p>
-        <button type="submit" className={`${button} !bg-accent-primary !text-white`} disabled={busy || !options.role.trim()}><Mic size={16} />Start interview</button>
+        <button type="submit" className={`${button} !bg-accent-primary !text-white`} disabled={busy || (options.focus !== 'personal' && !options.role.trim())}><Mic size={16} />Start interview</button>
         {history.length > 0 && <div className="space-y-2 border-t border-border-subtle pt-4"><h3 className="text-sm font-medium">Saved interviews</h3>{history.slice(0, 8).map(item => <button type="button" key={item.id} className={`${button} w-full !justify-between`} onClick={() => onLoad(item.id)}><span className="truncate">{item.options.role}</span><span className="shrink-0 text-xs text-text-secondary">{new Date(item.startedAt).toLocaleDateString()}</span></button>)}</div>}
     </form>
     );

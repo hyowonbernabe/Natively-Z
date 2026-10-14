@@ -1,7 +1,7 @@
 // Personal build: independent interview practice, separate from paid Modes/Profile.
 export interface InterviewOptions {
     role: string;
-    focus: 'mixed' | 'behavioral' | 'technical';
+    focus: 'mixed' | 'behavioral' | 'technical' | 'personal';
     language: 'English' | 'Filipino' | 'English and Filipino';
     questions: number;
     microphone: boolean;

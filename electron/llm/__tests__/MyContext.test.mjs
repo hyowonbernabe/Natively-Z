@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dist = (rel) => pathToFileURL(path.resolve(here, '../../../dist-electron/electron', rel)).href;
-const { readMyContext, selectMyContext, buildMyContextBlock, splitMyContext, renderMyContextBlock, resolveOutputStyleConfig, withOutputStyleSystemPrompt, MY_CONTEXT_MAX_CHARS } = await import(dist('llm/myContext.js'));
+const { readMyContext, selectMyContext, buildMyContextBlock, splitMyContext, renderMyContextBlock, resolveOutputStyleConfig, withOutputStyleSystemPrompt, MY_CONTEXT_MAX_CHARS, contextStories, validateStoryPriorities } = await import(dist('llm/myContext.js'));
 
 const FILE = `# Me
 My name is Hyowon. I built Messenger Z.
@@ -194,4 +194,32 @@ test('system-level output style preserves grounding and explicit formats, disabl
     assert.match(styled, /explain my project before its problem/);
     assert.equal(withOutputStyleSystemPrompt(styled, 'Use plain language.'), styled);
     assert.equal(withOutputStyleSystemPrompt(base, ''), base);
+});
+
+
+test('priorities reorder a short file without removing stories or facts', () => {
+  const priorities = { 'Scaling the chat backend': 'lower', 'Conflict with a teammate': 'preferred' };
+  const result = selectMyContext(FILE, 'tell me about a project', 10000, priorities);
+  assert.equal(result.stories[0], 'Conflict with a teammate');
+  assert.match(result.content, /sharded Postgres/);
+  assert.match(result.content, /My name is Hyowon/);
+  const prompt = renderMyContextBlock(FILE, 'tell me about a project', false, false, '', priorities);
+  assert.match(prompt, /user_story_preferences/);
+  assert.match(prompt, /explicitly naming a project takes precedence/);
+  assert.doesNotMatch(renderMyContextBlock('', 'project', false, false, '', priorities), /user_story_preferences/);
+});
+test('preferred stories can be retrieved for broad questions with no keyword match', () => {
+  const text = '# Facts\nReal person.\n\n## Story: Messenger Z\nBuilt a chat tool.\n\n## Story: Old work\n' + 'old '.repeat(400);
+  assert.deepEqual(selectMyContext(text, 'tell me about yourself', 150, { 'Messenger Z': 'preferred' }).stories, ['Messenger Z']);
+});
+test('explicit project question overrides lower weight in long files', () => {
+  const text = '# Facts\nReal person.\n\n## Story: Messenger Z\nBuilt a chat tool.\n\n## Story: TOS Risk Summarizer\nSolved a project problem.\n\n## Story: Too large\n' + 'old '.repeat(400);
+  const r = selectMyContext(text, 'Explain TOS Risk Summarizer', 105, { 'Messenger Z': 'preferred', 'TOS Risk Summarizer': 'lower' });
+  assert.equal(r.stories[0], 'TOS Risk Summarizer');
+  assert.ok(r.content.length <= 105);
+});
+test('priority entries validate and duplicate headings appear once', () => {
+  assert.deepEqual(contextStories(FILE + FILE), ['Scaling the chat backend', 'Conflict with a teammate']);
+  assert.equal(validateStoryPriorities({ Project: 'lower' }).Project, 'lower');
+  for (const value of [null, [], { Project: 100 }, { '': 'preferred' }]) assert.throws(() => validateStoryPriorities(value));
 });
