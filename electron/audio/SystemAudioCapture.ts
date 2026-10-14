@@ -129,7 +129,9 @@ export class SystemAudioCapture extends EventEmitter {
 
             this.isRecording = true; // Set BEFORE start() to prevent re-entrant calls
 
-            this.monitor.start((err: Error | null, chunk: Buffer) => {
+            const activeMonitor = this.monitor;
+            activeMonitor.start((err: Error | null, chunk: Buffer) => {
+                if (this.monitor !== activeMonitor || !this.isRecording) return;
                 // napi v3 ThreadsafeFunction passes (err, arg) format
                 if (err) {
                     console.error('[SystemAudioCapture] Callback error:', err);

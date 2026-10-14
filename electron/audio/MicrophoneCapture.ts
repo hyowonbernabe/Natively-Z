@@ -173,12 +173,25 @@ export class MicrophoneCapture extends EventEmitter {
 
             this.isRecording = true; // Set BEFORE start() to prevent re-entrant calls
 
-            this.monitor.start((err: Error | null, chunk: Buffer) => {
+            const activeMonitor = this.monitor;
+            activeMonitor.start((err: Error | null, chunk: Buffer) => {
+                if (this.monitor !== activeMonitor || !this.isRecording) return;
                 // napi v3 ThreadsafeFunction passes (err, arg) format
                 if (err) {
                     console.error('[MicrophoneCapture] Callback error:', err);
                     this.isRecording = false; // Allow recovery via restart
                     this.preWarmEnabled = false;
+                    // Personal build: a device disconnect exits the DSP loop but
+                    // still owns the native stream. Release it before recovery.
+                    this.monitor = null;
+                    this._orphanTeardown = new Promise<void>((resolve) => {
+                        setImmediate(() => {
+                            try { activeMonitor.stop(); } catch (error) {
+                                console.warn('[MicrophoneCapture] Failed-stream teardown:', error);
+                            }
+                            resolve();
+                        });
+                    });
                     this.emit('error', err);
                     return;
                 }
@@ -270,7 +283,7 @@ export class MicrophoneCapture extends EventEmitter {
         // starting a second one. If we are not recording AND no teardown is
         // in flight, this is a no-op resolved promise.
         if (!this.isRecording) {
-            return this._teardownPromise ?? Promise.resolve();
+            return this._teardownPromise ?? this._orphanTeardown ?? Promise.resolve();
         }
 
         console.log('[MicrophoneCapture] Stopping capture (deferred native teardown)...');

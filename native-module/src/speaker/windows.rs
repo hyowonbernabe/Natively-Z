@@ -33,6 +33,25 @@ pub struct SpeakerInput {
 /// ring buffer indistinguishable from a silent meeting.
 const MAX_CONSECUTIVE_READ_FAILURES: u32 = 5;
 
+// Personal build: COM apartments belong to threads, not the process. CPAL may
+// initialize the JS thread, but our spawned loopback thread starts without COM.
+// Keep its apartment alive until every WASAPI interface has been released.
+struct CaptureComApartment;
+
+impl CaptureComApartment {
+    fn initialize() -> Result<Self> {
+        wasapi::initialize_mta()
+            .map_err(|e| anyhow::anyhow!("WASAPI COM initialization failed: {}", e))?;
+        Ok(Self)
+    }
+}
+
+impl Drop for CaptureComApartment {
+    fn drop(&mut self) {
+        wasapi::deinitialize();
+    }
+}
+
 pub struct SpeakerStream {
     consumer: Option<HeapCons<f32>>,
     waker_state: Arc<Mutex<WakerState>>,
@@ -219,6 +238,14 @@ impl SpeakerInput {
         init_tx: mpsc::Sender<Result<u32>>,
         device_id: Option<String>,
     ) -> Result<()> {
+        let _com_apartment = match CaptureComApartment::initialize() {
+            Ok(apartment) => apartment,
+            Err(error) => {
+                let message = error.to_string();
+                let _ = init_tx.send(Err(anyhow::anyhow!(message.clone())));
+                return Err(anyhow::anyhow!(message));
+            }
+        };
         let init_result = (|| -> Result<_> {
             // Resolve target render device. If the saved device_id is stale
             // (unplugged, renamed, fresh install with leftover settings) we
@@ -400,6 +427,30 @@ impl Drop for SpeakerStream {
         }
         if let Some(handle) = self.capture_thread.take() {
             let _ = handle.join();
+        }
+    }
+}
+
+#[cfg(test)]
+mod com_tests {
+    use super::*;
+
+    #[test]
+    fn fresh_capture_threads_initialize_and_release_com() {
+        // Mirrors the spawned capture thread: COM on the caller never carries
+        // across. Enumeration needs no active playback or microphone access.
+        for _ in 0..3 {
+            thread::spawn(|| {
+                assert!(DeviceCollection::new(&Direction::Render).is_err());
+                {
+                    let _apartment = CaptureComApartment::initialize().unwrap();
+                    let devices = DeviceCollection::new(&Direction::Render).unwrap();
+                    assert!(devices.get_nbr_devices().is_ok());
+                }
+                assert!(DeviceCollection::new(&Direction::Render).is_err());
+            })
+            .join()
+            .unwrap();
         }
     }
 }

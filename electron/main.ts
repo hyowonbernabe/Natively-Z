@@ -4212,6 +4212,7 @@ export class AppState {
       // interleaved with the owner's audio it garbles the interviewer
       // transcript (F-102).
       if (this.systemAudioCapture === capture) {
+        this.publishMeetingAudioLevel('system', chunk);
         this.googleSTT?.write(chunk);
         // Smart Turn ring buffer (256 KB, interviewer channel only). Cheap
         // int16 copy; skipped entirely while Auto Answer is off.
@@ -4324,6 +4325,7 @@ export class AppState {
         }
       }
       lastChunkAt = now;
+      if (this.microphoneCapture === capture) this.publishMeetingAudioLevel('mic', chunk);
       chunkCount++;
       if (chunkCount === 1 && stuckTimer) {
         clearTimeout(stuckTimer);
@@ -6207,16 +6209,12 @@ export class AppState {
     // P2-12: guard against two concurrent calls both passing the async permission check
     // before either has created a capture — the second call would orphan the first capture.
     if (this._audioTestStarting) return;
-    // Block audio test while a meeting is live. Both code paths construct
-    // their own MicrophoneCapture instance against the same device; on Windows
-    // cpal grants exclusive access, so the second open silently degrades, and
-    // on macOS the meeting's capture and the test capture compete for the
-    // same input handle — symptom: meeting transcript stalls until the test
-    // is closed. Reject the request loudly via the IPC error path so the
-    // renderer can disable the Test button instead of letting the user think
-    // their mic is broken.
+    // Personal build: while a meeting is live, meter its existing captures.
+    // Never open a second microphone/tap just to draw the Settings meters.
     if (this.isMeetingActive) {
-      throw new Error('Audio test is unavailable while a meeting is active. End the meeting first, then test your microphone.');
+      this.stopAudioTest();
+      this._audioTestUsesMeetingCapture = true;
+      return;
     }
     this._audioTestStarting = true;
     try {
@@ -6232,6 +6230,23 @@ export class AppState {
   // meeting start), which is too late for a smooth "verify and proceed"
   // onboarding flow.
   private audioTestSystemCapture: SystemAudioCapture | null = null;
+  private _audioTestUsesMeetingCapture = false;
+
+  private publishMeetingAudioLevel(channel: 'mic' | 'system', chunk: Buffer): void {
+    if (!this._audioTestUsesMeetingCapture) return;
+    let sum = 0;
+    let count = 0;
+    for (let i = 0; i + 1 < chunk.length; i += 20) {
+      const sample = chunk.readInt16LE(i);
+      sum += sample * sample;
+      count++;
+    }
+    const level = count ? Math.min(Math.sqrt(sum / count) / 10000, 1) : 0;
+    const event = channel === 'mic' ? 'audio-test-level' : 'audio-test-system-level';
+    for (const target of [this.settingsWindowHelper.getSettingsWindow(), this.getWindowHelper().getLauncherWindow(), this.getWindowHelper().getOverlayWindow()]) {
+      if (target && !target.isDestroyed()) this.sendToWindow(target, event, level);
+    }
+  }
   // UX4 hardening (code-review HIGH): bumped on every startAudioTest call
   // AND every stopAudioTest call. The system-audio probe awaits
   // resolveMacScreenCaptureCapability for ~seconds; if the user closes the
@@ -6432,6 +6447,7 @@ export class AppState {
   }
 
   public stopAudioTest(): void {
+    this._audioTestUsesMeetingCapture = false;
     // UX4 hardening: bump epoch so any in-flight _startAudioTestImpl that's
     // awaiting resolveMacScreenCaptureCapability sees the change and skips
     // constructing the system capture (avoids orphaned-capture race).

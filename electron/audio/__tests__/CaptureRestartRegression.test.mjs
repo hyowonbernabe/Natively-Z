@@ -134,6 +134,32 @@ function flushSetImmediate() {
     return new Promise((resolve) => setImmediate(resolve));
 }
 
+for (const [kind, Capture] of [['microphone', MicrophoneCapture], ['system', SystemAudioCapture]]) {
+    test(`${kind}: device failure releases the handle and stale callbacks cannot stop its replacement`, async () => {
+        created[kind].length = 0;
+        const cap = new Capture('device-id');
+        const errors = [];
+        let chunks = 0;
+        cap.on('error', error => errors.push(error.message));
+        cap.on('data', () => chunks++);
+        cap.start();
+        const failed = created[kind][0];
+        failed._dataCb(new Error('device invalidated'), null);
+        await cap.stop();
+        assert.equal(failed.stopCalls, 1, 'failed native device must release before recovery');
+        cap.start();
+        const replacement = created[kind].at(-1);
+        assert.notEqual(replacement, failed);
+        failed._dataCb(new Error('late disconnect'), null);
+        failed._dataCb(null, Buffer.alloc(1920));
+        const before = chunks;
+        replacement._dataCb(null, Buffer.alloc(1920));
+        assert.equal(chunks, before + 1, 'replacement still delivers audio');
+        assert.deepEqual(errors, ['device invalidated']);
+        await cap.destroy();
+    });
+}
+
 test('SystemAudioCapture restart after stop must not reuse a torn-down native monitor', async () => {
     created.system.length = 0;
 

@@ -1605,6 +1605,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
     // granted, no loopback device, tap init refused).
     const [systemAudioLevel, setSystemAudioLevel] = useState(0);
     const [systemAudioError, setSystemAudioError] = useState<string | null>(null);
+    const [micAudioError, setMicAudioError] = useState<string | null>(null);
     // Which way each meter last moved. A level meter rises at once and falls
     // slowly (attack / release); one 100ms ease both ways made the bars jitter
     // on every update instead of reading as a level.
@@ -2211,6 +2212,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
             let lastMic = 0;
             let lastSystem = 0;
             const unsubscribe = window.electronAPI?.onAudioTestLevel?.((level) => {
+                setMicAudioError(null);
                 const next = Math.max(0, Math.min(100, level * 100));
                 setMicFalling(next < lastMic);
                 lastMic = next;
@@ -2235,19 +2237,26 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                 setSystemAudioError(message || 'System audio could not be captured.');
             });
 
-            window.electronAPI?.startAudioTest(selectedInput).catch((error) => {
+            const refreshAudioTest = () => window.electronAPI?.startAudioTest(selectedInput).catch((error) => {
                 console.error("Error starting native microphone test:", error);
                 setMicLevel(0);
+                setMicAudioError(error?.message || 'Microphone could not be captured.');
+            });
+            void refreshAudioTest();
+            const unsubscribeMeeting = window.electronAPI?.onMeetingStateChanged?.(() => {
+                void refreshAudioTest();
             });
 
             return () => {
                 unsubscribe?.();
                 unsubscribeSystemLevel?.();
                 unsubscribeSystemError?.();
+                unsubscribeMeeting?.();
                 window.electronAPI?.stopAudioTest?.().catch((error) => {
                     console.error("Error stopping native microphone test:", error);
                 });
                 setMicLevel(0);
+                setMicAudioError(null);
                 setSystemAudioLevel(0);
                 setSystemAudioError(null);
             };
@@ -2264,6 +2273,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
             console.error("Error stopping native microphone test (guard=false):", error);
         });
         setMicLevel(0);
+        setMicAudioError(null);
         // Reset the system meter on the same guard-false path as the mic one, or a
         // stale level/error from a previous test survives a tab switch.
         setSystemAudioLevel(0);
@@ -4414,6 +4424,9 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                                     a column would wrap it into a block. */}
                                                 {systemAudioError && (
                                                     <p className="text-xs text-red-500 mt-2 px-1 settings-swap-in">{systemAudioError}</p>
+                                                )}
+                                                {micAudioError && (
+                                                    <p role="alert" className="text-xs text-red-500 mt-2 px-1">{micAudioError}</p>
                                                 )}
                                             </div>
 
