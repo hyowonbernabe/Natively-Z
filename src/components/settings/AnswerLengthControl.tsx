@@ -47,7 +47,16 @@ export function AnswerLengthControl({ compact = false, dark = false }: { compact
     </select>;
     const description = options.find(option => option.value === length)?.description;
     if (compact) return <div className={`mx-2 my-2 border-t pt-2 ${dark ? 'border-white/10 text-white/80' : 'border-black/10 text-slate-700'}`}>
-        <label htmlFor={controlId} className="mb-1.5 block text-[11px] font-medium">Answer length</label>{select}
+        <div id={controlId} className="mb-1.5 text-[11px] font-medium">Answer length</div>
+        <div role="group" aria-labelledby={controlId} className="grid grid-cols-2 gap-1">
+            {options.map(option => <button key={option.value} type="button" aria-pressed={length === option.value}
+                disabled={length === null || busy} onClick={() => { void change(option.value); }}
+                className={`rounded-md border px-1 py-1.5 text-[11px] transition-colors disabled:opacity-50 ${length === option.value
+                    ? dark ? 'border-white/30 bg-white/15 text-white' : 'border-slate-900/30 bg-slate-900 text-white'
+                    : dark ? 'border-white/10 bg-white/5 text-white/75 hover:bg-white/10' : 'border-black/10 bg-black/5 text-slate-700 hover:bg-black/10'}`}>
+                {option.label}
+            </button>)}
+        </div>
         <p className="mt-1 text-[10px] leading-relaxed" role={error ? 'alert' : undefined}>{error || 'Applies to new answers.'}</p>
     </div>;
     return <section className="mt-6 border-t border-border-subtle pt-6">
