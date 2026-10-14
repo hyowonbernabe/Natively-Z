@@ -150,6 +150,8 @@ export interface IntelligenceModeEvents {
     // can drop a batch from an answer that was already superseded. Optional →
     // id-less emits still accepted downstream (backward-compatible).
     'suggested_answer_token': (token: string, question: string, confidence: number, generationId?: number) => void;
+    // Personal build (Natively Z): filler / bridge line chunk for answer generationId.
+    'filler_token': (chunk: string, generationId: number) => void;
     // Emitted when an in-flight what-to-answer stream that ALREADY showed a
     // deterministic scaffold ends WITHOUT a final answer (superseded by a newer
     // generation, declined as a non-answer sentinel, or errored). The renderer
@@ -1225,6 +1227,17 @@ export class IntelligenceEngine extends EventEmitter {
                         if (trigger.automatic) this.automaticGenerationId = this.currentGenerationId;
                         // Unmute the stream NOW: paint what it has, stream the rest.
                         try { this.speculativeAdoptHook?.(this.currentGenerationId); } catch (err) { console.warn('[IntelligenceEngine] adopted-stream paint failed; it will reveal at completion:', err); }
+                        // Personal build (Natively Z): the adopted head-start answer is still coming, so bridge it too.
+                        const fillerGen = this.currentGenerationId;
+                        const fillerSignal = this.whatToAnswerCancellationToken?.signal;
+                        if (fillerSignal && trigger.lastQuestion) {
+                            void require('./llm/filler').runFiller({
+                                helper: this.llmHelper,
+                                question: trigger.lastQuestion,
+                                signal: fillerSignal,
+                                onToken: (chunk: string) => { if (this.currentGenerationId === fillerGen) this.emit('filler_token', chunk, fillerGen); },
+                            });
+                        }
                         return;
                     }
                     if (finished) {
@@ -4436,6 +4449,15 @@ export class IntelligenceEngine extends EventEmitter {
             // session transcript and usage, and fed to the NEXT turn as
             // prior_assistant_responses evidence.
             const wtaTruncation: { truncated: boolean; reason?: string } = { truncated: false };
+            // Personal build (Natively Z): filler / bridge line, in parallel with the answer below (every answer type).
+            if (!isSpeculative && answerPlan?.question) {
+                void require('./llm/filler').runFiller({
+                    helper: this.llmHelper,
+                    question: answerPlan.question,
+                    signal: whatToAnswerCancellationToken.signal,
+                    onToken: (chunk: string) => { if (!isWtaSuperseded()) this.emit('filler_token', chunk, generationId); },
+                });
+            }
             const stream = this.whatToAnswerLLM.generateStream(preparedTranscript, temporalContext, intentResult, imagePaths, screenContext, options?.promptInstruction, options?.activeSkill, options?.domContext, candidateProfile || undefined, answerPlan, modeContextPromise, requestSnapshot, whatToAnswerCancellationToken.signal, wtaTruncation);
             let streamAborted = false;
             let emittedStreamingToken = false;
@@ -4539,7 +4561,8 @@ export class IntelligenceEngine extends EventEmitter {
             // has to be re-learned from scratch after a restart. That is the
             // one thing observedUserEndpointLatency above cannot do: its map
             // dies with the process.
-            const firstUsefulDeadline = applyAdaptiveTtft(
+            // Personal build (Natively Z): outerDeadlineMs leaves room for the backup chain's next model.
+            const firstUsefulDeadline = require('./llm/backupChain').outerDeadlineMs(applyAdaptiveTtft(
                 totalHardTimeoutMs({
                     isLocal: usingLocalLlm,
                     isVisionTurn,
@@ -4548,7 +4571,7 @@ export class IntelligenceEngine extends EventEmitter {
                     observedUserEndpointLatency,
                 }),
                 { llmHelper: answerLlm, hasImages: isVisionTurn, inputTokens: estimateTokens(`${preparedTranscript ?? ''}${candidateProfile ?? ''}`) },
-            );
+            ), isVisionTurn || usingLocalLlm);
             // Time-to-first-token for THIS turn, recorded only if it commits —
             // see LLMHelper.recordAnswerFirstToken for why an aborted turn must
             // not teach the budget.
@@ -7515,6 +7538,32 @@ export class IntelligenceEngine extends EventEmitter {
         } catch { return null; }
     }
 
+    // Personal build (Natively Z): filler / bridge line for every answer route that is not the
+    // what-to-answer path (that one has its own, tied to its generation). A new one cancels the last.
+    private _fillerAbort: AbortController | null = null;
+    private _fillerSeq = 0;
+    private startFiller(action: string, question?: string): void {
+        try {
+            // No typed question (Recap, Clarify…): give the model the action and what was actually just said.
+            let q = String(question || '').trim();
+            if (!q) {
+                let recent = '';
+                try { recent = String(this.session.getFormattedContext(90) || '').slice(-500); } catch { /* no session yet */ }
+                q = `(You are about to start ${action}.)` + (recent ? `\nWhat was just said:\n${recent}` : '');
+            }
+            this._fillerAbort?.abort('superseded');
+            const ac = new AbortController();
+            this._fillerAbort = ac;
+            const gen = 1_000_000_000 + ++this._fillerSeq;
+            void require('./llm/filler').runFiller({
+                helper: this.llmHelper,
+                question: q,
+                signal: ac.signal,
+                onToken: (chunk: string) => { if (this._fillerAbort === ac) this.emit('filler_token', chunk, gen); },
+            });
+        } catch { /* the filler never blocks an answer */ }
+    }
+
     async runFollowUp(intent: string, userRequest?: string): Promise<string | null> {
         console.log(`[IntelligenceEngine] runFollowUp called with intent: ${intent}`);
         const lastMsg = this.session.getLastAssistantMessage();
@@ -7537,6 +7586,7 @@ export class IntelligenceEngine extends EventEmitter {
                 return null;
             }
 
+            this.startFiller('reworking your previous answer', userRequest); // Personal build (Natively Z)
             const context = this.buildPreparedTranscriptContext(120) || this.session.getFormattedContextWithInterim(60);
             const refinementRequest = userRequest || intent;
 
@@ -7721,6 +7771,7 @@ export class IntelligenceEngine extends EventEmitter {
                 return null;
             }
 
+            this.startFiller('giving a quick recap of the conversation so far'); // Personal build (Natively Z)
             const context = this.session.getFormattedContext(120);
             if (!context) {
                 console.warn('[IntelligenceEngine] No context available for recap');
@@ -7823,6 +7874,7 @@ export class IntelligenceEngine extends EventEmitter {
                 return null;
             }
 
+            this.startFiller('asking the other person to clarify what they just said'); // Personal build (Natively Z)
             const actionContext = this.buildActionContextWithManualFallback(180);
             // If no transcript/manual turn yet, use a generic prompt — the LLM will ask a scoping question
             const context = actionContext?.text || '[No transcript or recent manual answer available yet. Generate an opening clarifying question to understand the scope and constraints of the upcoming problem.]';
@@ -7912,6 +7964,7 @@ export class IntelligenceEngine extends EventEmitter {
                 return null;
             }
 
+            this.startFiller('asking the other person a follow-up question'); // Personal build (Natively Z)
             const actionContext = this.buildActionContextWithManualFallback(120);
             const context = actionContext?.text;
             if (!context) {
@@ -8013,6 +8066,7 @@ export class IntelligenceEngine extends EventEmitter {
                 return null;
             }
 
+            this.startFiller('answering', question); // Personal build (Natively Z)
             const activeModeInfo = this.getActiveModeInfo();
             const answerPlan = planAnswer({
                 question,
@@ -8219,6 +8273,7 @@ export class IntelligenceEngine extends EventEmitter {
             }
 
             // Resolve question context from available sources (priority order)
+            this.startFiller('explaining how you would approach this coding problem', problemStatement); // Personal build (Natively Z)
             const sessionQuestion = this.session.getDetectedCodingQuestion();
             const questionContext = problemStatement ?? sessionQuestion.question ?? null;
             const questionSource = problemStatement
@@ -8313,6 +8368,7 @@ export class IntelligenceEngine extends EventEmitter {
                 return "Please configure your API Keys in Settings to use this feature.";
             }
 
+            this.startFiller('talking through a few ways to approach this problem', problemStatement); // Personal build (Natively Z)
             const context = this.session.getFormattedContext(180);
             // The problem statement goes with it so the LLM knows exactly what to brainstorm
             const resolvedProblem = problemStatement?.trim() ||

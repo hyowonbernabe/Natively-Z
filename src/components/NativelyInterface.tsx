@@ -20,6 +20,7 @@ import {
   RefreshCw,
   SlidersHorizontal,
   X,
+  CornerDownRight, MessageSquareQuote, // Personal build (Natively Z): filler line / backup note marks
 } from 'lucide-react';
 import {
   mergeRollingTranscriptFinal,
@@ -509,6 +510,28 @@ const CHROME_MOTION_FALLBACK_MS = 600;
 // shared: the height tween is nominally 300ms, so it just gets a longer
 // fail-safe, which costs nothing because its onComplete clears the deadline.
 const RESIZE_SUPPRESSION_TAIL_MS = 320;
+
+// Personal build (Natively Z): the filler line shown above an answer. It is text to SAY, so it sits at the
+// answer's reading size and weight (14px medium, relaxed leading), softened, with the note line's leading mark: a speech mark for "say this".
+const FillerLine: React.FC<{ text: string }> = ({ text }) => (
+  <div data-filler-line className="flex items-start gap-2 min-w-0" title="Say this while the answer loads">
+    <span aria-hidden="true" className="flex-shrink-0 w-3 h-3 mt-[6px]">
+      <MessageSquareQuote className="w-full h-full overlay-text-primary opacity-[0.5]" strokeWidth={2} />
+    </span>
+    <p className="min-w-0 font-medium overlay-text-primary opacity-[0.72] text-[14px] leading-relaxed break-words">{text}</p>
+  </div>
+);
+
+// Personal build (Natively Z): which backup model answered — a note ABOUT the answer, drawn exactly like the
+// app's own ChatNoteLine (ui/DirectAssistNotice.tsx): footnote size, corner mark, no colour.
+const BackupNote: React.FC<{ text: string }> = ({ text }) => (
+  <div data-backup-note className="ov-notice flex items-start gap-2 max-w-[440px]">
+    <span aria-hidden="true" className="ov-notice-line flex-shrink-0 w-3 h-3 mt-[2.5px]">
+      <CornerDownRight className="w-full h-full overlay-text-primary opacity-[0.6]" strokeWidth={2} />
+    </span>
+    <div className="ov-notice-line min-w-0 font-medium overlay-text-primary opacity-[0.88] text-[11.5px] leading-[1.45] break-words">{text}</div>
+  </div>
+);
 
 interface Message {
   id: string;
@@ -7504,6 +7527,43 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
     () => collapseConsecutiveDuplicateSystemMessages(messages),
     [messages],
   );
+  // Personal build (Natively Z): filler / bridge lines and "answered by a backup" notes, shown above
+  // their answer. Each entry remembers the message that was last when it arrived (or the answer row that
+  // was already open), so anchoring follows message ids, not row numbers: a cleared chat or a removed
+  // row hides the entry instead of moving it onto an unrelated answer.
+  type AnswerNote = { genId: number; text: string; afterId: string | null; openId: string | null; at: number };
+  const [fillers, setFillers] = useState<AnswerNote[]>([]);
+  const [backupNotes, setBackupNotes] = useState<AnswerNote[]>([]);
+  const displayMsgsRef = useRef<Message[]>([]);
+  displayMsgsRef.current = displayMessages;
+  const fillerAnchors = useMemo(() => {
+    const now = Date.now();
+    const anchor = (n: AnswerNote, claimed?: Set<number>): number | 'gone' | 'pending' => {
+      if (n.openId) {
+        const i = displayMessages.findIndex((m) => m.id === n.openId);
+        return i >= 0 ? i : 'gone';
+      }
+      const from = n.afterId === null ? 0 : displayMessages.findIndex((m) => m.id === n.afterId) + 1;
+      if (n.afterId !== null && from === 0) return 'gone';
+      const i = displayMessages.findIndex((m, k) => k >= from && m.role === 'system' && !claimed?.has(k));
+      return i >= 0 ? i : 'pending';
+    };
+    const byIdx = new Map<number, string>();
+    let tail: string | null = null;
+    for (const f of fillers) {
+      const a = anchor(f, new Set(byIdx.keys()));
+      if (typeof a === 'number') byIdx.set(a, f.text);
+      else if (a === 'pending' && now - f.at < 20_000) tail = f.text;
+    }
+    const notesByIdx = new Map<number, string>();
+    let tailNote: string | null = null;
+    for (const n of backupNotes) {
+      const a = anchor(n);
+      if (typeof a === 'number') notesByIdx.set(a, n.text);
+      else if (a === 'pending' && now - n.at < 20_000) tailNote = n.text;
+    }
+    return { byIdx, tail, notesByIdx, tailNote };
+  }, [fillers, backupNotes, displayMessages]);
   // ──────────────────────────────────────────────────────────────────────────
 
   const applyRollingPartialPreview = useCallback((partialText: string) => {
@@ -7797,6 +7857,31 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
           return [...prev, { id: `correction-${Date.now()}`, role: 'system', ...corrected }];
         });
       }) ?? (() => {}),
+    );
+
+    // Personal build (Natively Z): where a note/filler belongs — the answer row already open, else the next one.
+    const placeNote = (genId: number, text: string) => {
+      const msgs = displayMsgsRef.current;
+      const last = msgs[msgs.length - 1];
+      const open = last && last.isStreaming && last.role === 'system' ? last.id : null;
+      return { genId, text, afterId: open ? null : (last?.id ?? null), openId: open, at: Date.now() };
+    };
+    // Personal build (Natively Z): a backup model answered because the chosen one failed.
+    cleanups.push(
+      window.electronAPI.onIntelligenceBackupUsed(({ name, failedName, reason, at }) => {
+        setBackupNotes((prev) => [...prev.slice(-19), placeNote(at, `Answered by ${name}: ${failedName} ${reason}`)]);
+      }),
+    );
+
+    // Personal build (Natively Z): filler / bridge line chunks.
+    cleanups.push(
+      window.electronAPI.onIntelligenceFillerToken(({ chunk, generationId }) => {
+        setFillers((prev) => {
+          const last = prev[prev.length - 1];
+          if (last && last.genId === generationId) return [...prev.slice(0, -1), { ...last, text: last.text + chunk }];
+          return [...prev.slice(-19), placeNote(generationId, chunk)];
+        });
+      }),
     );
 
     // Sprint 9: time-batched token channel — single subscription that
@@ -11881,15 +11966,20 @@ Provide only the answer, nothing else.`;
                                         re-render every prior message — bailout fires on
                                         identity equality (msg, theme, callbacks). */}
                   {displayMessages
-                    .map((msg: Message) => (
-                    <MessageRow
-                      key={msg.id}
-                      msg={msg}
-                      isLightTheme={isLightTheme}
-                      appearance={appearance}
-                      renderMessageText={renderMessageText}
-                    />
+                    .map((msg: Message, i: number) => (
+                    <React.Fragment key={msg.id}>
+                      {fillerAnchors.notesByIdx.has(i) && <BackupNote text={fillerAnchors.notesByIdx.get(i)!} />}
+                      {fillerAnchors.byIdx.has(i) && <FillerLine text={fillerAnchors.byIdx.get(i)!} />}
+                      <MessageRow
+                        msg={msg}
+                        isLightTheme={isLightTheme}
+                        appearance={appearance}
+                        renderMessageText={renderMessageText}
+                      />
+                    </React.Fragment>
                   ))}
+                  {fillerAnchors.tailNote && <BackupNote text={fillerAnchors.tailNote} />}
+                  {fillerAnchors.tail && <FillerLine text={fillerAnchors.tail} />}
 
                   {/* Active Recording State with Live Transcription.
                       The pale emeralds are for a dark panel; on the light one

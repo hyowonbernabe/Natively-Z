@@ -183,7 +183,12 @@ function recoverFromKilledRun() {
 {
   const { calendarSecretProblem, isUnpackedDirBuild } = require('./lib/calendar-client-secret.cjs');
   const problem = calendarSecretProblem(path.join(__dirname, '..'));
-  if (problem && isUnpackedDirBuild(builderArgs)) {
+  // Personal build (Natively Z): explicitly opt out of Calendar sync for a local installer.
+  // Normal releases still require the baked OAuth credential.
+  const personalWithoutCalendar = process.env.NATIVELY_PERSONAL_NO_CALENDAR === '1';
+  if (problem && personalWithoutCalendar) {
+    console.warn('[package-app] Personal build: Calendar sync is unavailable (explicit opt-out).');
+  } else if (problem && isUnpackedDirBuild(builderArgs)) {
     console.warn(`[package-app] WARNING: calendar sync will not work in this build. ${problem}`);
   } else if (problem) {
     console.error(`[package-app] Refusing to package: ${problem}`);

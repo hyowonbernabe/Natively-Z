@@ -492,6 +492,10 @@ export const AboutSection: React.FC<AboutSectionProps> = ({ onNavigate, onOpenMo
                         <CommunityActionRow key={title} title={title} body={body} control={action} />
                     ))}
                 </div>
+                {/* Personal build (Natively Z): attribution required by the license, section 6. */}
+                <p className="mt-3 px-1 text-[11px] opacity-70">
+                    Natively Z is an unofficial, free, non-commercial build. This project is based on Natively, originally developed by Natively AI Private Limited.
+                </p>
             </section>
 
             {/* On <body>, not in this column: Settings' card clips its content

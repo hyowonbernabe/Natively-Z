@@ -1804,6 +1804,22 @@ export function initializeIpcHandlers(appState: AppState): void {
         }
         myController = new AbortController();
         _chatStreamsBySender.set(senderId, { streamId: myStreamId, controller: myController });
+        // Personal build (Natively Z): filler / bridge line for chat and the Answer button, in parallel
+        // with the reply. Negative id keeps it apart from engine generations. skipSystemPrompt = raw internal calls.
+        try {
+          const fillerQ = String(message || '').trim() || ((imagePaths?.length) ? 'Can you take a look at this?' : '');
+          if (fillerQ && !options?.skipSystemPrompt) {
+            void require('./llm/filler').runFiller({
+              helper: llmHelper,
+              question: fillerQ,
+              signal: myController.signal,
+              onToken: (chunk: string) => {
+                if (_chatStreamsBySender.get(senderId)?.streamId !== myStreamId || event.sender.isDestroyed()) return;
+                event.sender.send('intelligence-filler-token', { chunk, generationId: -myStreamId });
+              },
+            });
+          }
+        } catch (fillerErr: any) { console.warn('[Filler] chat hook skipped:', fillerErr?.message); }
         // The overlay cancels its own stream on session-reset, and modes:set-active
         // aborts every sender's, but the launcher's chat (GlobalChat /
         // MeetingChat fallback) is not cancelled at meeting stop. Its answer is
@@ -2522,11 +2538,11 @@ export function initializeIpcHandlers(appState: AppState): void {
             // A persona-less V3 system (v2 kill-switch) has no diagram contract;
             // a v2 persona already carries exactly one, and the helper never
             // adds a second.
-            const v3SystemPrompt = withDiagramContract(
+            const v3SystemPrompt = require('./llm/myContext').withMyContext(withDiagramContract(
               skillPromptBlock ? `${composed.system}\n\n## ACTIVE SKILL\n${skillPromptBlock}` : composed.system,
               manualDiagramTurn,
               { tier: llmHelper?.getPromptTier?.() === 'tiny' ? 'local' : 'cloud', surface: answerSurface },
-            );
+            ), message);
             require('./llm/promptDebug').notePromptComposition({
               surface: 'manual-chat',
               promptSource: 'v3',
@@ -4726,7 +4742,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         if (callerOwnedLiveQuestion && legacyDiagramTurn) {
           context = withMeetingSpeechForDiagramTurn(context, legacyDiagramTurn, () => appState.getIntelligenceManager?.()?.getFormattedSpeech?.(DIAGRAM_SPEECH_WINDOW_SECONDS), message) || context;
         }
-        const systemPromptOverride: string | undefined = options?.skipSystemPrompt
+        const _manualBasePrompt: string | undefined = options?.skipSystemPrompt
           ? ''
           : resolveManualChatBasePrompt(llmHelper, resolveCodingPromptSignals({
             answerType: answerPlan.answerType,
@@ -4744,6 +4760,10 @@ export function initializeIpcHandlers(appState: AppState): void {
             // even though the user-channel contract is attached below.
             codingTurnPromoted: isCodingChat,
           }), answerSurface, legacyDiagramTurn);
+        // Personal build: user's own my-context.md (not on coding/safety turns).
+        const systemPromptOverride: string | undefined = (_manualBasePrompt && !isCodingChat && answerPlan.answerType !== 'ethical_usage_answer')
+          ? require('./llm/myContext').withMyContext(_manualBasePrompt, message)
+          : _manualBasePrompt;
         // NOTE (audit 2026-06-28): the document-grounded greeting-suppression +
         // question-first restructuring now lives INSIDE LLMHelper._streamChatInner
         // (shapeDocumentGroundedSystemPrompt + buildDocumentGroundedUserContent),
@@ -5050,12 +5070,14 @@ export function initializeIpcHandlers(appState: AppState): void {
             // adaptiveTtft flag is off; persisted-profile-backed when it is on.
             // The two surfaces read the same route table, so they take the same
             // post-filter — a divergence here is invisible from either one.
-            firstUsefulDeadlineMs: applyAdaptiveTtft(
+            // Personal build (Natively Z): with the backup chain on, each model gets its own 8 s inside the
+            // chain, so the outer limit must leave room for the next one.
+            firstUsefulDeadlineMs: require('./llm/backupChain').outerDeadlineMs(applyAdaptiveTtft(
               (imagePaths?.length ?? 0) > 0
                 ? totalHardTimeoutMs({ isLocal: usingLocalLlm, isVisionTurn: true, viaServerCascade })
                 : firstUsefulDeadlineMs(answerPlan.answerType, usingLocalLlm, viaServerCascade, usingUserEndpoint, observedUserEndpointLatency),
               { llmHelper: answerLlm as any, hasImages: (imagePaths?.length ?? 0) > 0, inputTokens: _estimatePerfTokens(`${message ?? ''}${context ?? ''}`) },
-            ),
+            ), (imagePaths?.length ?? 0) > 0 || (answerLlm as any).isUsingOllama?.() === true),
             isUsefulYet: () => manualFirstUseful,
             shouldAbort: () => {
               if (_chatStreamsBySender.get(senderId)?.streamId !== myStreamId) {
@@ -8054,6 +8076,20 @@ export function initializeIpcHandlers(appState: AppState): void {
 
     const onSenderDestroyed = (): void => controller.abort();
     event.sender.once?.('destroyed', onSenderDestroyed);
+    // Personal build (Natively Z): filler / bridge line for Direct Assist too, in parallel with its answer.
+    try {
+      const fillerQ = String(request.currentRequest || '').trim() || (request.imagePaths?.length ? 'Can you take a look at this?' : '');
+      const daSender = event.sender;
+      const daFillerId = -1_000_000 - (++_chatStreamId);
+      if (fillerQ) {
+        void require('./llm/filler').runFiller({
+          helper: appState.processingHelper.getLLMHelper(),
+          question: fillerQ,
+          signal: controller.signal,
+          onToken: (chunk: string) => { if (!daSender.isDestroyed()) daSender.send('intelligence-filler-token', { chunk, generationId: daFillerId }); },
+        });
+      }
+    } catch (fillerErr: any) { console.warn('[Filler] direct-assist hook skipped:', fillerErr?.message); }
 
     // referenceFiles and meetingTranscript are always server-computed, not
     // taken from the renderer (which never sends either): raw, unchunked,
@@ -8616,6 +8652,11 @@ export function initializeIpcHandlers(appState: AppState): void {
       return { ok: false, error: e?.message };
     }
   });
+
+  // Personal build (Natively Z): Settings → Intelligence → My Context.
+  require('./llm/myContext').registerMyContextIpc(safeHandle);
+  require('./llm/filler').registerFillerIpc(safeHandle, () => appState.processingHelper.getLLMHelper());
+  require('./llm/backupChain').registerBackupIpc(safeHandle);
 
   // User-initiated Hindsight opt-out. Sets the explicit-disable sentinel so the synthetic
   // default doesn't silently re-enable Hindsight on next launch. Idempotent; broadcasts a

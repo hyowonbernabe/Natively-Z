@@ -1,3 +1,22 @@
+> **Natively Z** — an unofficial, free, non-commercial personal build with My Context, opening lines, automatic model backups, and Filipino/Taglish speech options.
+> This project is based on Natively, originally developed by Natively AI Private Limited. Licensed under the same Natively Personal Use Source License v1.0 (see LICENSE). Not affiliated with or endorsed by Natively AI Private Limited.
+
+### Personal Windows installer
+
+After installing dependencies and the required local model assets, run:
+
+```powershell
+node scripts/build-personal-windows.cjs
+```
+
+The installer is written to `release/`. This personal build omits Calendar sync,
+preserves the upstream application identity and license, and does not publish to
+upstream releases. Windows builds are unsigned unless signing credentials are
+configured. The regular macOS and official release commands are unchanged.
+
+Personal context, API credentials, downloaded speech models, and settings remain
+local to your user data; they are not bundled into the installer or committed here.
+
 # [Sponsored by Recall AI - API for desktop recording](https://docs.recall.ai/docs/desktop-sdk?utm_source=github&utm_medium=sponsorship&utm_campaign=evinjohnn-natively-ai-assistant)
 
 If you’re looking for a hosted desktop recording API, consider checking out [Recall.ai](https://docs.recall.ai/docs/desktop-sdk?utm_source=github&utm_medium=sponsorship&utm_campaign=evinjohnn-natively-ai-assistant), an API that records Zoom, Google Meet, Microsoft Teams, in-person meetings, and more.

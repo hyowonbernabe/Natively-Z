@@ -79,7 +79,12 @@ export const MODEL_CATALOG: WhisperModelInfo[] = [
   //    file_size encoder_model.onnx_data). The encoder is fp32 on every
   //    platform (uniform-fp32 on Apple; encoder_model:'fp32' in the per-module
   //    map elsewhere), so this key is platform-robust.
-  { id: 'onnx-community/whisper-large-v3-turbo-ONNX', name: 'Whisper Large v3 Turbo', sizeMb: 1031, speed: 'medium', accuracy: 'very-high', multilingual: true, status: 'missing', externalDataFormat: { 'encoder_model.onnx': true } },
+  // Personal build (Natively Z): repo switched from onnx-community/whisper-large-v3-turbo-ONNX, whose decoders
+  // require a `cache_position` input that @huggingface/transformers 3.8.x never supplies (every transcription
+  // failed: "Missing the following inputs: cache_position"). This repo is the Oct-2024 export the library runs.
+  // Personal build (Natively Z): real download with this app's dtype = fp32 encoder (onnx 0.4 MB + onnx_data 2548 MB)
+  // + q8 decoder_model_merged (438 MB) + configs ≈ 2990 MB; the old 1031 under-stated it 3x.
+  { id: 'onnx-community/whisper-large-v3-turbo', name: 'Whisper Large v3 Turbo', sizeMb: 2990, speed: 'medium', accuracy: 'very-high', multilingual: true, status: 'missing', externalDataFormat: { 'encoder_model.onnx': true } },
 
   // ── Standard Whisper
   { id: 'Xenova/whisper-tiny.en',    name: 'Tiny English',    sizeMb: 39,   speed: 'very-fast', accuracy: 'decent',   multilingual: false, status: 'missing' },

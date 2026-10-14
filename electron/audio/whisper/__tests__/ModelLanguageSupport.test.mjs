@@ -57,6 +57,8 @@ const OFFICIAL_WHISPER_NAMES = new Set([
   'danish', 'czech', 'hungarian', 'vietnamese', 'thai', 'greek', 'bulgarian',
   'hebrew', 'malay', 'finnish',
   'croatian', 'estonian', 'latvian', 'lithuanian', 'maltese', 'slovak', 'slovenian',
+  // Personal build (Natively Z): "tl": "tagalog" is in openai/whisper tokenizer.py LANGUAGES.
+  'tagalog',
 ]);
 
 test('every catalog model has a language-support entry with keys drawn from RECOGNITION_LANGUAGES', () => {

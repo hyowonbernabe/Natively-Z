@@ -4,7 +4,7 @@ import { safeDetachAndClose } from './wsSafeTeardown';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { RECOGNITION_LANGUAGES } from '../config/languages';
+import { RECOGNITION_LANGUAGES, TAGLISH_LANGUAGE_KEY } from '../config/languages';
 import { streamingStttWsOptions } from './dnsHelpers';
 import { RealtimeSilenceTail } from './realtimeSilenceTail';
 
@@ -99,7 +99,9 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
 
     /** Recognition language - maps Natively key to ISO-639-1 for ElevenLabs, or 'auto' to omit code */
     public setRecognitionLanguage(key: string): void {
-        const newCode = key === 'auto' ? '' : (RECOGNITION_LANGUAGES[key]?.iso639 ?? this.languageCode);
+        // Personal build (Natively Z): Taglish → omit the code (Scribe's smart detection); Filipino is 'fil' there.
+        const iso = key === 'auto' || key === TAGLISH_LANGUAGE_KEY ? '' : (RECOGNITION_LANGUAGES[key]?.iso639 ?? this.languageCode);
+        const newCode = iso === 'tl' ? 'fil' : iso;
         if (this.languageCode !== newCode) {
             console.log(`[ElevenLabsStreaming] Language changed: ${this.languageCode || '(auto)'} -> ${newCode || '(auto)'}`);
             this.languageCode = newCode;

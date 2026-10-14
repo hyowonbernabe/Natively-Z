@@ -10,6 +10,13 @@ import { isMac } from '../utils/platformUtils';
 import { AIP_CSS, AipBadge, AipSwitch } from './settings/AIProvidersSettings';
 import { useResolvedTheme } from '../hooks/useResolvedTheme';
 
+// Personal build (Natively Z): local models recommended for Filipino / Taglish (Tagalog is a Whisper
+// language; Moonshine, Distil and the .en models are English-only, Parakeet/Nemotron have no Tagalog).
+const FILIPINO_PICKS: Record<string, string> = {
+    'onnx-community/whisper-large-v3-turbo': 'Recommended for Filipino',
+    'Xenova/whisper-small': 'Filipino (faster, less accurate)',
+};
+
 interface ModelInfo {
     id: string;
     name: string;
@@ -740,6 +747,11 @@ export function LocalWhisperModelPanel({ onModelConfigChanged }: LocalWhisperMod
                     </div>
                     {/* A pointer, not a second badge — deliberately plain text. With fifteen
                         rows you should not have to scan for the one suited to this machine. */}
+                    {/* Personal build (Natively Z): the Filipino options only appear in Language once a model
+                        that understands Tagalog is selected, so say which ones do. */}
+                    <p className="aip-meta mt-1">
+                        For Filipino or Taglish, choose <span className="font-medium">Whisper Large v3 Turbo</span> or Small Multilingual for faster transcription. Then select Filipino or English + Filipino under Language.
+                    </p>
                     {recommendedName && (
                         <p className="text-[11px] mt-1" style={{ color: 'var(--aip-tertiary)' }}>
                             {t('Best for this')} {isMac ? 'Mac' : 'PC'}: <span className="font-medium" style={{ color: 'var(--aip-secondary)' }}>{recommendedName}</span>
@@ -810,6 +822,8 @@ export function LocalWhisperModelPanel({ onModelConfigChanged }: LocalWhisperMod
                                                     {inUseLabel && <AipBadge tone="info" label={inUseLabel} />}
                                                     {isRecommended && !isInUse && <AipBadge tone="ok" label={t('Recommended')} />}
                                                     {model.requiresAppleSilicon && <AipBadge tone="neutral" label="Apple Silicon" />}
+                                                    {/* Personal build (Natively Z): models that understand Filipino and Taglish. */}
+                                                    {FILIPINO_PICKS[model.id] && <AipBadge tone="ok" label={FILIPINO_PICKS[model.id]} />}
                                                 </div>
                                                 {/* Size leads because it is the one hard number, and it is the
                                                     constraint people actually weigh. Speed and accuracy are plain

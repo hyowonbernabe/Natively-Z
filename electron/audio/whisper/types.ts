@@ -9,7 +9,7 @@ export type WhisperModelId =
   | 'Xenova/whisper-medium.en'
   // Whisper Large v3 Turbo — 6× faster than Large v3, ~equivalent WER,
   // multilingual. ONNX-converted by the onnx-community.
-  | 'onnx-community/whisper-large-v3-turbo-ONNX'
+  | 'onnx-community/whisper-large-v3-turbo'
   // Distil-Whisper — same architecture, distilled to 1/2 layers, ~6× faster
   // CPU/GPU inference at near-equivalent WER. English-only.
   | 'distil-whisper/distil-small.en'

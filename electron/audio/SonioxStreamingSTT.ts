@@ -19,7 +19,7 @@
 import { EventEmitter } from 'events';
 import { getSttContextTerms } from './sttContextTerms';
 import WebSocket from 'ws';
-import { RECOGNITION_LANGUAGES } from '../config/languages';
+import { RECOGNITION_LANGUAGES, TAGLISH_LANGUAGE_KEY } from '../config/languages';
 import { streamingStttWsOptions } from './dnsHelpers';
 import { shouldReviveExhaustedReconnect, DEFAULT_REVIVE_COOLDOWN_MS } from './sttReconnectPolicy.mjs';
 import { RealtimeSilenceTail } from './realtimeSilenceTail';
@@ -144,8 +144,9 @@ export class SonioxStreamingSTT extends EventEmitter {
                 console.warn(`[SonioxStreaming] Unknown language key: ${key} — keeping ${previous ?? 'auto'}`);
                 return;
             }
-            this.languageCode = config.iso639;
-            console.log(`[SonioxStreaming] Language hint set to ${this.languageCode} (strict)`);
+            // Personal build (Natively Z): Taglish = both languages as soft hints (see _buildConfig).
+            this.languageCode = key === TAGLISH_LANGUAGE_KEY ? 'tl,en' : config.iso639;
+            console.log(`[SonioxStreaming] Language hint set to ${this.languageCode}${key === TAGLISH_LANGUAGE_KEY ? ' (mixed)' : ' (strict)'}`);
         }
 
         if (this.languageCode !== previous && this.isActive) {
@@ -201,7 +202,12 @@ export class SonioxStreamingSTT extends EventEmitter {
         const terms = getSttContextTerms();
         if (terms.length) config.context = { terms };
 
-        if (this.languageCode) {
+        if (this.languageCode && this.languageCode.includes(',')) {
+            // Personal build (Natively Z): Taglish — Soniox follows mid-sentence switches between the
+            // hinted languages; hints are soft and per-token language identification stays on.
+            config.language_hints = this.languageCode.split(',');
+            config.enable_language_identification = true;
+        } else if (this.languageCode) {
             config.language_hints = [this.languageCode];
             config.language_hints_strict = true;
         } else {

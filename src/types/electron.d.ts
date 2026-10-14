@@ -792,6 +792,22 @@ export interface ElectronAPI {
   getContextDebugConfig: () => Promise<{ level: 'off' | 'standard' | 'verbose'; levelSource: 'environment' | 'setting' | 'default'; contentInclusion: boolean; storedLevel?: 'off' | 'standard' | 'verbose'; logDirectory?: string | null; currentFile?: string | null; error?: string }>
   setContextDebugLevel: (level: 'off' | 'standard' | 'verbose') => Promise<{ ok: boolean; error?: string }>
   openContextDebugFolder: () => Promise<{ ok: boolean; error?: string }>
+  getMyContext: () => Promise<{ path: string | null; enabled: boolean; exists: boolean; chars: number }>
+  setMyContextEnabled: (enabled: boolean) => Promise<{ path: string | null; enabled: boolean; exists: boolean; chars: number }>
+  openMyContext: () => Promise<{ ok: boolean; error?: string }>
+  showMyContext: () => Promise<{ ok: boolean }>
+  onIntelligenceFillerToken: (callback: (data: { chunk: string; generationId: number }) => void) => () => void
+  getFillerConfig: () => Promise<{ model: string; storyHint: boolean }>
+  setFillerModel: (model: string) => Promise<{ model: string; storyHint: boolean }>
+  setFillerStoryHint: (on: boolean) => Promise<{ model: string; storyHint: boolean }>
+  filterFillerCandidates: (ids: string[]) => Promise<string[]>
+  testFillerSpeed: (modelId: string) => Promise<{ modelId: string; ok: boolean; firstTokenMs?: number; totalMs?: number; wordsPerSec?: number; text?: string; error?: string }>
+  onIntelligenceBackupUsed: (callback: (data: { id: string; name: string; failedName: string; reason: string; at: number }) => void) => () => void
+  getBackupConfig: () => Promise<{ enabled: boolean; pinned: string[]; cooling: Array<{ id: string; kind: string; until: number }> }>
+  setBackupEnabled: (on: boolean) => Promise<{ enabled: boolean; pinned: string[]; cooling: Array<{ id: string; kind: string; until: number }> }>
+  setBackupPinned: (ids: string[]) => Promise<{ enabled: boolean; pinned: string[]; cooling: Array<{ id: string; kind: string; until: number }> }>
+  setBackupKnown: (ids: string[]) => Promise<boolean>
+  clearBackupCooling: (id?: string) => Promise<{ enabled: boolean; pinned: string[]; cooling: Array<{ id: string; kind: string; until: number }> }>
   clearContextDebugLogs: () => Promise<{ ok: boolean; removed?: number; error?: string }>
   exportContextDebugSession: () => Promise<{ ok: boolean; path?: string; error?: string }>
   getHindsightConfig: () => Promise<{ baseUrl: string; hasApiKey: boolean; autoStart: boolean; serverCommand: string; llmProvider: string; available: boolean; mode: 'local' | 'cloud'; synthetic: boolean; explicitlyDisabled: boolean; authFailed: boolean }>

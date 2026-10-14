@@ -9,6 +9,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useT } from '../../i18n';
 import { Disclosure } from '../ui/AccordionSection';
 import { ProviderPerformanceSettings } from './ProviderPerformanceSettings';
+import { MyContextSection } from './MyContextSection';
 import { LiquidGlassBadge } from '../../ui-components/LiquidGlassBadge';
 import { LiquidGlassButton } from '../../ui-components/LiquidGlassButton';
 import {
@@ -772,6 +773,9 @@ export const IntelligenceSettings: React.FC = () => {
     // pane title, matching Audio and Sync — the first section heading leads.
     <SettingsMotionReady.Provider value={motionReady}>
     <div className="space-y-8 animated fadeIn" data-settings-stagger>
+      {/* Personal build (Natively Z) */}
+      <MyContextSection />
+
       {/* ── Memory: Hindsight long-term memory, then the memory switches ── */}
       <section>
         <SettingsSectionHeading

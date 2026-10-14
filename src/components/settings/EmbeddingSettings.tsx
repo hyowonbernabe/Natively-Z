@@ -1596,7 +1596,11 @@ export const EmbeddingSettings: React.FC<EmbeddingSettingsProps> = ({ renderPart
                                 const [providerId, ...rest] = id.split('::');
                                 const modelId = rest.join('::');
                                 if (providerId === 'local' && modelId) {
-                                    void useLocalModel(modelId);
+                                    // Personal build (Natively Z): the catalogue names local models by their HF repo
+                                    // ("Xenova/multilingual-e5-small"); useLocalEmbeddingModel wants the local id
+                                    // ("multilingual-e5-small") and answered unknown_model, so the pick did nothing.
+                                    const local = localModels.find(m => m.id === modelId || m.repo === modelId);
+                                    void useLocalModel(local?.id ?? modelId);
                                 } else {
                                     void select(providerId, modelId);
                                 }

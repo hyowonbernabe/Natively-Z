@@ -93,7 +93,7 @@ describe('catalog invariants', () => {
       'distil-whisper/distil-medium.en',
       'distil-whisper/distil-large-v3',
       'distil-whisper/distil-large-v2',
-      'onnx-community/whisper-large-v3-turbo-ONNX',
+      'onnx-community/whisper-large-v3-turbo',
       'Xenova/whisper-tiny.en',
       'Xenova/whisper-tiny',
       'Xenova/whisper-base.en',
@@ -135,7 +135,7 @@ describe('catalog invariants', () => {
   // Verified against the HF repo file listings:
   //   distil-whisper/distil-medium.en  → ships NO *.onnx_data at all
   //   distil-whisper/distil-large-v3   → onnx/encoder_model.onnx_data
-  //   onnx-community/whisper-large-v3-turbo-ONNX → onnx/encoder_model.onnx_data
+  //   onnx-community/whisper-large-v3-turbo → onnx/encoder_model.onnx_data
   //
   // externalDataFormat makes isModelCached REQUIRE the companion file. Declaring
   // it for a checkpoint that ships none means the check can never be satisfied:
@@ -146,7 +146,7 @@ describe('catalog invariants', () => {
     // Ships encoder external data — must declare it, else an aborted download
     // leaves a stub-without-data that falsely reports "available" and then
     // crashes ORT at load ("filesystem error: file_size encoder_model.onnx_data").
-    for (const id of ['distil-whisper/distil-large-v3', 'onnx-community/whisper-large-v3-turbo-ONNX']) {
+    for (const id of ['distil-whisper/distil-large-v3', 'onnx-community/whisper-large-v3-turbo']) {
       const ext = getModelExternalDataFormat(id);
       assert.ok(ext && typeof ext === 'object', `${id} must declare externalDataFormat (object form)`);
       assert.equal(ext['encoder_model.onnx'], true, `${id} must declare encoder_model.onnx: true`);

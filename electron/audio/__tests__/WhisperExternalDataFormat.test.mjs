@@ -1,6 +1,6 @@
 // Regression test for the Whisper external-data download bug (2026-06-13).
 //
-// Large ONNX checkpoints (e.g. onnx-community/whisper-large-v3-turbo-ONNX) store
+// Large ONNX checkpoints (e.g. onnx-community/whisper-large-v3-turbo) store
 // the graph in a tiny `encoder_model.onnx` stub but the ~820MB of weights in a
 // sibling `encoder_model.onnx_data`. @huggingface/transformers only fetches that
 // companion when `use_external_data_format` is truthy. That model's config.json
@@ -55,7 +55,7 @@ const {
 } = await import(pathToFileURL(modelMgrPath).href);
 const { buildWorkerInitMessage } = await import(pathToFileURL(inferenceCfgPath).href);
 
-const TURBO = 'onnx-community/whisper-large-v3-turbo-ONNX';
+const TURBO = 'onnx-community/whisper-large-v3-turbo';
 const MOONSHINE = 'onnx-community/moonshine-tiny-ONNX';
 // distil-large-v3 self-declares external data in ITS OWN config.json. The
 // catalog ALSO records the layout (matching value) so the cache check can

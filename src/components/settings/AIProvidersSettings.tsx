@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
+import { FillerModelCard } from './FillerModelCard';
+import { BackupOrderCard } from './BackupOrderCard';
 import { useLanguage, useT } from '../../i18n';
 import type { VisionModelState } from '../../types/electron';
 import { visionAutoText, visionStatusText, visionAnswerInForce, visionStatesShown, visionNotesKept } from './visionLine';
@@ -803,6 +805,27 @@ export const AIP_CSS = `
 }
 /* max-height, never height: at n=3 the well is short, at n=70 it scrolls. */
 .aip-models-well { max-height:216px; padding:4px; }
+/* Personal build: added model settings use the same card, row and control tokens. */
+.aip-feature-card { padding:20px; display:flex; flex-direction:column; gap:16px; min-width:0; }
+.aip-feature-head { display:flex; flex-wrap:wrap; align-items:center; gap:12px 16px; }
+.aip-feature-copy { flex:1 1 200px; min-width:0; }
+.aip-feature-head > :last-child { max-width:100%; }
+.aip-feature-row { display:flex; align-items:center; justify-content:space-between; gap:16px;
+    padding-top:14px; border-top:1px solid var(--aip-border); }
+.aip-feature-toolbar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; }
+.aip-feature-list { display:flex; flex-direction:column; gap:8px; }
+.aip-backup-row { flex-wrap:wrap; padding-top:6px; padding-bottom:6px; color:var(--aip-primary); }
+.aip-backup-row .aip-model-name { flex:1 1 150px; }
+.aip-well.aip-speed-scroll { position:relative; overflow-x:auto; min-width:0; }
+.aip-speed-table { width:100%; min-width:420px; border-collapse:collapse; font-size:12px;
+    color:var(--aip-primary); font-variant-numeric:tabular-nums; }
+.aip-speed-table th { font-size:10px; font-weight:600; color:var(--aip-secondary); }
+.aip-speed-table th, .aip-speed-table td { padding:8px; text-align:right; border-bottom:1px solid var(--aip-border); }
+.aip-speed-table th:first-child, .aip-speed-table td:first-child { text-align:left; }
+.aip-speed-table tbody tr:last-child td { border-bottom:0; }
+.aip-speed-table tbody tr:hover { background:var(--aip-item-hover); }
+.aip-speed-name { display:flex; align-items:center; gap:6px; }
+.aip-speed-name > span:first-child { max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 /* The row is a container, not a button: it holds the membership toggle AND the
    "Set default" action, and a <button> may not contain a <button>. */
 .aip-model-row {
@@ -5366,6 +5389,22 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
                         }}
                     />
                 </div>
+
+            {/* Personal build (Natively Z) */}
+            <BackupOrderCard allOptions={buildAvailableModelOptions()} activeModelId={defaultModel} />
+
+            <FillerModelCard
+                allOptions={buildAvailableModelOptions()}
+                renderSelect={(value, options, onChange) => (
+                    <ModelSelect
+                        containerClassName={AIP_ACTIVE_SELECT_CONTAINER}
+                        minLabel={HERO_MODEL_PICKER_MIN_LABEL}
+                        value={value}
+                        options={options}
+                        onChange={onChange}
+                    />
+                )}
+            />
 
             <div className="aip-card p-5 flex items-center justify-between gap-4">
                     <div className="min-w-0">

@@ -1400,6 +1400,9 @@ export function composePrompt(input: ComposeInput): ComposedPrompt {
 
   const sections: string[] = [];
   const push = (name: string, body: string) => { if (body.trim()) sections.push(name); return body; };
+  // Personal build: with the user's my-context.md present, the "nothing records the user's life / no evidence"
+  // notices are false and make the model dodge, so they stand down (the file rides in the system prompt).
+  const _myCtx = (() => { try { return Boolean(require('../../llm/myContext').readMyContext().trim()); } catch { return false; } })();
 
   // An instruction-extraction/override request gets an explicit refusal
   // directive FIRST. The permanent rules already say evidence is untrusted data,
@@ -1542,7 +1545,7 @@ export function composePrompt(input: ComposeInput): ComposedPrompt {
       // the exact fabrication the grounding policy exists to prevent.
       // A FAST turn gets nothing: it never needed evidence, and telling it that
       // retrieval failed would be false.
-      : push('no_evidence', noEvidenceNotice(
+      : push('no_evidence', _myCtx ? '' : noEvidenceNotice(
         d, input.attachedSourceCount, input.profileSourceCount,
         input.conversationHasContent === true,
         input.conversationHasScreenObservation === true,
@@ -1554,8 +1557,8 @@ export function composePrompt(input: ComposeInput): ComposedPrompt {
       ? push('privacy_withheld', privacyWithholdingNotice(input.withheldScopes, true))
       : '',
     push('today', todayNotice(input.now ?? new Date(), d.resolvedQuestion, input.conversationSummary, packed.evidenceBlock)),
-    push('evidence_story', evidenceStoryGuard(d, Boolean(packed.evidenceBlock))),
-    push('personal_commitment', personalCommitmentNotice(d.resolvedQuestion, policy.id, Boolean(input.heardQuestion))),
+    push('evidence_story', _myCtx ? '' : evidenceStoryGuard(d, Boolean(packed.evidenceBlock))),
+    push('personal_commitment', _myCtx ? '' : personalCommitmentNotice(d.resolvedQuestion, policy.id, Boolean(input.heardQuestion))),
     push('calculation', calculationNotice(d.resolvedQuestion, input.conversationSummary, packed.evidenceBlock)),
     push('refinement', refinementNotice(d.resolvedQuestion, input.conversationSummary, input.heardQuestion === true)),
     // Steps or a counted set: the numbered-list rule lives in the system prompt,

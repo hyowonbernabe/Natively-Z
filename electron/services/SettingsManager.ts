@@ -6,6 +6,18 @@ export interface AppSettings {
     /** The Calendar account name whose full-name mentions in saved notes were carried
      *  to the first name (calendarNameMigration); set once per name. */
     calendarFirstNameMigratedFor?: string;
+    /** Personal build (Natively Z): My Context on/off. Undefined = on. */
+    myContextEnabled?: boolean;
+    /** Personal build (Natively Z): filler model — 'auto' (default), 'off', or a model id. */
+    fillerModel?: string;
+    /** Personal build (Natively Z): filler may name the matching story. Default off. */
+    fillerStoryHint?: boolean;
+    /** Personal build (Natively Z): backup chain on/off (unset = on), user's ordered picks, models the
+     *  renderer reported as connected, and measured first-token ms per model (speed tests). */
+    backupChainEnabled?: boolean;
+    backupPinned?: string[];
+    backupKnownModels?: string[];
+    modelSpeedMs?: Record<string, number>;
     // Only boot-critical or non-encrypted settings should live here.
     // In the future, other non-secret data like 'language' or 'theme'
     // can be moved here from CredentialsManager to allow early boot access.

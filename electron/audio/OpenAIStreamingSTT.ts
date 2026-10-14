@@ -18,7 +18,7 @@ import WebSocket from 'ws';
 import { safeDetachAndClose } from './wsSafeTeardown';
 import axios from 'axios';
 import FormData from 'form-data';
-import { RECOGNITION_LANGUAGES } from '../config/languages';
+import { RECOGNITION_LANGUAGES, TAGLISH_LANGUAGE_KEY } from '../config/languages';
 import { streamingStttWsOptions } from './dnsHelpers';
 import { OpenAITranscriptTurnCoalescer } from './openaiTranscriptTurnCoalescer';
 import { OpenAILiveTranscriptItems } from './openaiLiveTranscriptItems';
@@ -602,7 +602,7 @@ export class OpenAIStreamingSTT extends EventEmitter {
     private _buildSessionUpdate(model: WsModel): Record<string, unknown> {
         // Configure the transcription session
         // 'auto' key → empty string so Whisper/gpt-4o-transcribe auto-detects the language
-        const lang = (this.languageKey && this.languageKey !== 'auto')
+        const lang = (this.languageKey && this.languageKey !== 'auto' && this.languageKey !== TAGLISH_LANGUAGE_KEY) // Personal build (Natively Z): Taglish → auto-detect
             ? (RECOGNITION_LANGUAGES[this.languageKey]?.iso639 ?? '')
             : '';
 
@@ -1247,6 +1247,7 @@ export class OpenAIStreamingSTT extends EventEmitter {
         });
         form.append('model', 'whisper-1');
 
+        // whisper-1 knows Tagalog; Taglish goes as 'tl' (auto-detect risks translating Tagalog to English).
         const lang = (this.languageKey && this.languageKey !== 'auto')
             ? (RECOGNITION_LANGUAGES[this.languageKey]?.iso639 ?? '')
             : '';

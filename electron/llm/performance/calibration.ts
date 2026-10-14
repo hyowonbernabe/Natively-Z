@@ -145,6 +145,8 @@ async function runOne(
   let captured: StreamObservation | null = null;
   const controller = new AbortController();
   const timer = setTimeout(() => { try { controller.abort(); } catch { /* noop */ } }, timeoutMs);
+  // Personal build (Natively Z): calibration measures ONE model; the backup chain must not swap it.
+  try { require('../backupChain').noBackup(controller.signal); } catch { /* chain unavailable */ }
   try {
     // Same argument tuple shape the answer paths use. `ignoreKnowledgeMode` and
     // `skipModeInjection` are both TRUE so a calibration request carries no

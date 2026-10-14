@@ -5468,6 +5468,160 @@ let isMultimodal = !!(imagePaths?.length);
     return this.resolveFastModelFamily(modelId) !== null;
   }
 
+  // ── Personal build (Natively Z): backup chain ──────────────────────────────
+  /** The active model as the model lists name it (Ollama ids carry their "ollama-" prefix there). */
+  public backupActiveModelId(): string {
+    return this.useOllama && !this.customProvider && !this.activeCurlProvider ? `ollama-${this.ollamaModel}` : this.getCurrentModelId();
+  }
+
+  /** Model-selection fields a per-attempt view keeps to itself; every other field writes through. */
+  private static readonly VIEW_LOCAL_KEYS = new Set([
+    'useOllama', 'ollamaModel', 'customProvider', 'activeCurlProvider', 'currentModelId', 'geminiModel',
+    'codexCliConfig', 'groqFastTextMode', '_fastTurn', '__backupAttempt',
+  ]);
+
+  /**
+   * A per-attempt view of this helper. Only the selection fields above are private to it (so a
+   * temporary provider swap in one attempt never leaks into a concurrent one); every other write goes
+   * to the real helper, so failure memory (cooldowns, dead keys, caches) survives the turn.
+   */
+  private turnView(overrides: Record<string, unknown> = {}): LLMHelper {
+    const local: Record<string, unknown> = { __backupAttempt: true, ...overrides };
+    const keys = LLMHelper.VIEW_LOCAL_KEYS;
+    return new Proxy(this, {
+      get(target, key, receiver) {
+        if (typeof key === 'string' && keys.has(key) && key in local) return local[key];
+        return Reflect.get(target, key, receiver);
+      },
+      set(target, key, value) {
+        if (typeof key === 'string' && keys.has(key)) { local[key] = value; return true; }
+        return Reflect.set(target, key, value);
+      },
+    });
+  }
+
+  /**
+   * A per-attempt view answering on `modelId`. Mirrors setModel's selection fields without its side
+   * effects (Ollama pin release, logs). Background-model fast picks are off: the backup must answer
+   * on the model the chain chose.
+   */
+  private viewOnModel(modelId: string): LLMHelper {
+    if (modelId.startsWith('ollama-')) {
+      return this.turnView({ _fastTurn: undefined, groqFastTextMode: false, useOllama: true, ollamaModel: modelId.slice('ollama-'.length), customProvider: null, activeCurlProvider: null });
+    }
+    const custom: any = (this.configuredCustomProviders || []).find((p: any) => p.id === modelId);
+    // A cURL provider lives in its own slot (see switchToCurl); a custom provider in customProvider.
+    const isCurl = !!custom && typeof custom.curlCommand === 'string';
+    const o: Record<string, unknown> = {
+      _fastTurn: undefined, groqFastTextMode: false, useOllama: false,
+      activeCurlProvider: isCurl ? custom : null,
+      customProvider: custom && !isCurl ? custom : null,
+    };
+    if (!custom) {
+      o.currentModelId = modelId;
+      if (modelId === GEMINI_PRO_MODEL || modelId === GEMINI_FLASH_MODEL) o.geminiModel = modelId;
+      if (this.isCodexCliModel(modelId)) o.codexCliConfig = { ...this.codexCliConfig, model: this.codexModelForFastPick(modelId) };
+    }
+    return this.turnView(o);
+  }
+
+  /**
+   * _streamChatInner behind the backup chain: the active model first, then the user's backup
+   * order, then every other known model fastest first (electron/llm/backupChain.ts).
+   */
+  private innerWithBackups(args: Parameters<LLMHelper['_streamChatInner']>): AsyncGenerator<string, void, unknown> | null {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const bc = require('./llm/backupChain') as typeof import('./llm/backupChain');
+    const hasImages = ((args[1] as string[] | undefined)?.length ?? 0) > 0;
+    // Skipped (null → the turn runs exactly as stock): no signal / batch jobs (opted out), a
+    // local-only user, a local (Ollama) model (a failure must not send the turn to the cloud),
+    // screenshot turns (the vision chain has its own fallback).
+    if (!args[7] || !bc.isBackupChainEnabled() || this.isLocalOnlyMode || hasImages
+        || (this.useOllama && !this.customProvider && !this.activeCurlProvider)
+        || bc.isOptedOut(args[7] as AbortSignal | undefined)) {
+      return null;
+    }
+    return this.runWithBackups(bc, args);
+  }
+
+  private async * runWithBackups(
+    bc: typeof import('./llm/backupChain'),
+    args: Parameters<LLMHelper['_streamChatInner']>,
+  ): AsyncGenerator<string, void, unknown> {
+    const callerSignal = args[7] as AbortSignal | undefined;
+    const outer = callerSignal ?? new AbortController().signal;
+    const withSignal = (sig: AbortSignal) => { const a = [...args] as Parameters<LLMHelper['_streamChatInner']>; (a as any)[7] = sig; return a; };
+    const active = this.backupActiveModelId();
+    // The active model's FIRST attempt answers for the caller's turn record (who answered, its
+    // deadline and latency row are keyed by the caller's signal); retries and backups resolve fresh.
+    let primaryClaimed = false;
+    const openPrimary = (sig: AbortSignal) => {
+      if (callerSignal && !primaryClaimed) {
+        primaryClaimed = true;
+        try { const rec = (this as any).fastTurnFor(callerSignal); (this as any)._fastTurns?.set(sig, rec); } catch { /* record is best-effort */ }
+      }
+      // Own view per attempt: two concurrent attempts must not share temporary provider swaps.
+      return this.turnView()._streamChatInner(...withSignal(sig));
+    };
+    const ids = bc.orderModels({
+      active,
+      pinned: bc.backupPinned(),
+      known: [...bc.backupKnownModels(), ...this.fillerAutoCandidates()],
+      speedMs: bc.modelSpeedMs,
+    });
+    const rungs = ids.map((id) => ({
+      id,
+      name: bc.prettyModelName(id),
+      firstTokenMs: id.startsWith('ollama-') ? bc.BACKUP_LOCAL_FIRST_TOKEN_MS : bc.BACKUP_FIRST_TOKEN_MS,
+      open: id === active
+        ? openPrimary
+        : (sig: AbortSignal) => this.viewOnModel(id)._streamChatInner(...withSignal(sig)),
+    }));
+    yield* bc.runBackupChain(rungs, outer, (rung, _index, nth) => {
+      // Only the active model's FIRST attempt answers under the caller's record; anything else
+      // (its retry, a backup) must not file its first-token time under the active model.
+      if (callerSignal && !(rung.id === active && nth === 1)) {
+        try { (this as any).fastTurnFor(callerSignal).answered = 'rescued'; } catch { /* best-effort */ }
+      }
+      if (rung.id !== active) bc.announceBackupUsed(rung.id, rung.name, active);
+    });
+  }
+
+  // ── Personal build (Natively Z): filler / bridge line ──────────────────────
+  /** Filler can run every fast-seam family plus Antigravity and local Ollama. */
+  public canDispatchFillerModel(modelId: string): boolean {
+    return !!modelId && (modelId.startsWith('ollama-') || this.isAntigravityModel(modelId) || this.canDispatchFastModel(modelId));
+  }
+
+  /** Candidates "Auto" may try for the filler, best guess first. Never empty when any model is set. */
+  public fillerAutoCandidates(): string[] {
+    let tier: string | undefined;
+    try { tier = this.autoFastOrder().find((c) => this.fastCandidateUsable(c.modelId, c.family))?.modelId; } catch { /* shipped order unreadable */ }
+    return [...new Set([tier, this.fastModelId, this.currentModelId].filter((m): m is string => !!m && this.canDispatchFillerModel(m)))];
+  }
+
+  /** Streams one short filler line on an explicit model. Never touches currentModelId. */
+  public streamFillerLine(modelId: string, system: string, user: string, signal: AbortSignal): AsyncGenerator<string, void, unknown> {
+    if (modelId.startsWith('ollama-')) return this.streamWithOllama(user, undefined, system, undefined, signal, modelId.slice('ollama-'.length), true);
+    if (this.isAntigravityModel(modelId)) return this.streamWithAntigravity(user, system, undefined, signal, modelId, true);
+    const family = this.resolveFastModelFamily(modelId);
+    switch (family) {
+      case 'openai': return this.streamWithOpenai(user, system, modelId, signal);
+      case 'claude': return this.streamWithClaude(user, system, modelId, signal);
+      case 'deepseek': return this.streamWithDeepseek(user, system, modelId, signal);
+      case 'groq': return this.streamWithGroq(user, modelId, system, signal, true);
+      case 'gemini': return this.streamWithGeminiModel(user, modelId, undefined, system, signal);
+      case 'codex': return this.streamWithCodexCli(user, system, true, undefined, signal, this.codexModelForFastPick(modelId));
+      case 'openrouter': return this.streamWithOpenRouter(user, system, undefined, signal, modelId);
+      case 'litellm': return this.streamWithLiteLLM(user, system, undefined, signal, modelId);
+      case 'nvidia_nim': return this.streamWithNvidiaNim(user, system, undefined, signal, modelId);
+      case 'ninerouter': return this.streamWithNinerouter(user, system, undefined, signal, modelId);
+      case 'fluxion': return this.streamWithFluxion(user, system, undefined, signal, modelId);
+      case 'agentrouter': return this.streamWithAgentRouter(user, system, undefined, signal, modelId);
+      default: throw new Error(`filler: model not dispatchable (${modelId})`);
+    }
+  }
+
   /**
    * Fast Response Mode's answer on the Background Model — or, on Auto, on
    * autoFastPick()'s fastest candidate — or null when neither can run right
@@ -9558,6 +9712,8 @@ let isMultimodal = !!(imagePaths?.length);
     // A stuck answer ends on its repetition, long before the length cap (2026-10-04).
     const { RepetitionGuard } = await import('./llm/repetitionGuard');
     const repetition = new RepetitionGuard();
+    // Personal build (Natively Z): batch generations never go through the backup chain.
+    if (profile === 'long_form' && args[7]) { try { require('./llm/backupChain').noBackup(args[7]); } catch { /* chain unavailable */ } }
     for await (const chunk of this._streamChatInner(...args)) {
       if (abortSignal?.aborted) return;
       // Strip the internal truncation marker before anything downstream sees
@@ -9758,6 +9914,13 @@ let isMultimodal = !!(imagePaths?.length);
     // by the real answer type). Absent → legacy behavior (no change).
     routeOptions?: StreamRouteOptions
   ): AsyncGenerator<string, void, unknown> {
+    // Personal build (Natively Z): backup chain. A turn not already inside an attempt runs through
+    // innerWithBackups, whose attempts re-enter here on per-attempt views (flagged __backupAttempt).
+    if (!(this as any).__backupAttempt) {
+      // eslint-disable-next-line prefer-rest-params
+      const chained = this.innerWithBackups([...arguments] as unknown as Parameters<LLMHelper['_streamChatInner']>);
+      if (chained) { yield* chained; return; }
+    }
     // OKF Phase 1 (F7 fix): capture the caller-supplied `context` BEFORE the
     // mode-injection block below mutates it by prepending modeContextBlock.
     // For document-grounded answers this is the sanitized rolling-transcript

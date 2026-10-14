@@ -13,6 +13,8 @@ import './llm/promptDebug';
 // import-time reader (CredentialsManager resolves its paths at module scope).
 // Must stay above every other import — see utils/pinUserData.ts.
 import './utils/pinUserData';
+// Personal build: claim verifier (post-answer rewrite) off. Set NATIVELY_CLAIM_VERIFIER=1 to bring it back.
+if (process.env.NATIVELY_CLAIM_VERIFIER !== '1') process.env.NATIVELY_CLAIM_VERIFIER = '0';
 
 import { buildEmbeddingConfig } from './rag/embeddingConfigIdentity';
 import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, systemPreferences, screen, desktopCapturer } from "electron"
@@ -7319,6 +7321,16 @@ export class AppState {
       // uses this stamp to drop or visibly label stale finals.
       this.sendToWindow(win, 'intelligence-suggested-answer', { answer, question, confidence, generationId, sourceLabel: sourceLabel ?? 'General knowledge', emittedAt: Date.now(), ...(stopReason ? { stopReason } : {}) })
 
+    })
+
+    // Personal build (Natively Z): a backup model answered because the chosen one failed.
+    require('./llm/backupChain').backupEvents.on('used', (info: { id: string; name: string; failedName: string; reason: string; at: number }) => {
+      // Launcher AND overlay: answers can render in either; the main window alone missed the overlay.
+      this.sendToMeetingSurfaces('intelligence-backup-used', info)
+    })
+    // Personal build (Natively Z): filler / bridge line. Sent unbatched; it is a handful of chunks.
+    this.intelligenceManager.on('filler_token', (chunk: string, generationId: number) => {
+      this.sendToMeetingSurfaces('intelligence-filler-token', { chunk, generationId })
     })
 
     this.intelligenceManager.on('suggested_answer_token', (token: string, question: string, confidence: number, generationId?: number) => {

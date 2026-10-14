@@ -1,5 +1,7 @@
 # Logs
 logs
+# Personal build: local test output, never source.
+/each-ours*.txt
 .env
 STATUS.md
 left.md

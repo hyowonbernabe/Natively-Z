@@ -117,6 +117,9 @@ const WHISPER_LANGUAGE_BY_ISO639: Record<string, string> = {
   mt: 'maltese',
   sk: 'slovak',
   sl: 'slovenian',
+  // Personal build (Natively Z): Tagalog / Filipino.
+  tl: 'tagalog',
+  fil: 'tagalog',
 };
 
 /**

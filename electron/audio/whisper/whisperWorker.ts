@@ -256,6 +256,16 @@ async function initParakeetChannel(msg: any, channelId: string): Promise<void> {
   }
 }
 
+// Personal build (Natively Z): Tagalog/Taglish is written in Latin letters. When Whisper mishears it,
+// it can emit Thai, CJK, Korean, Cyrillic or Arabic script; such a line is noise, not a transcript.
+const NON_LATIN_RE = /[Ѐ-ӿ؀-ۿ฀-๿぀-ヿ一-鿿가-힯]/g;
+export function dropForeignScript(text: string, language: string | null): string {
+  if (language !== 'tagalog' || !text) return text;
+  const letters = text.replace(/[^\p{L}]/gu, '').length;
+  const foreign = (text.match(NON_LATIN_RE) || []).length;
+  return letters > 0 && foreign / letters > 0.3 ? '' : text;
+}
+
 parentPort.on('message', async (msg: any) => {
   if (msg.type === 'init') {
     if (msg.sessionLayout === 'nemotron-rnnt') {
@@ -658,7 +668,7 @@ parentPort.on('message', async (msg: any) => {
       parentPort!.postMessage({
         type: streaming ? 'partial' : 'result',
         taskId: msg.taskId,
-        text: result.text ?? '',
+        text: dropForeignScript(result.text ?? '', language),
       });
     } catch (e: any) {
       parentPort!.postMessage({

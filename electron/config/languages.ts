@@ -98,9 +98,16 @@ export const AUTO_DETECT_ALTERNATES = [
     'fi-FI',
 ];
 
+/** Personal build (Natively Z): the English + Filipino (Taglish) key — both languages, mixed within a sentence. */
+export const TAGLISH_LANGUAGE_KEY = 'english-filipino';
+
 export const RECOGNITION_LANGUAGES: Record<string, LanguageOption> = {
     'auto': { label: 'Auto Detect', code: 'auto', bcp47: 'auto', iso639: 'auto', group: 'Auto', alternates: AUTO_DETECT_ALTERNATES },
     ...ENGLISH_VARIANTS,
+    // Personal build (Natively Z): Filipino, and English + Filipino (Taglish: both in the same sentence).
+    // Tagalog's ISO 639-1 code is 'tl' (what Whisper and most APIs use); 'fil-PH' is the BCP-47 locale.
+    'filipino': { label: 'Filipino (Tagalog)', code: 'filipino', bcp47: 'fil-PH', iso639: 'tl', group: 'Filipino' },
+    'english-filipino': { label: 'English + Filipino (Taglish)', code: 'english-filipino', bcp47: 'fil-PH', iso639: 'tl', group: 'English + Filipino', alternates: ['en-US'] },
     'indonesian': { label: 'Indonesian', code: 'indonesian', bcp47: 'id-ID', iso639: 'id', group: 'Indonesian' },
     'russian': { label: 'Russian', code: 'russian', bcp47: 'ru-RU', iso639: 'ru', group: 'Russian' },
     'spanish': { label: 'Spanish', code: 'spanish', bcp47: 'es-ES', iso639: 'es', group: 'Spanish' },
