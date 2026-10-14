@@ -4,7 +4,7 @@
 // and a real speed test per model. Logic lives in electron/llm/filler.ts.
 import { Gauge } from 'lucide-react';
 import React, { useEffect, useState } from 'react';
-import { AipBadge, AipSwitch } from './AIProvidersSettings';
+import { AipBadge } from './AIProvidersSettings';
 
 type Opt = { id: string; name: string };
 type Result = { modelId: string; ok: boolean; firstTokenMs?: number; totalMs?: number; wordsPerSec?: number; text?: string; error?: string };
@@ -14,13 +14,12 @@ export const FillerModelCard: React.FC<{
   renderSelect: (value: string, options: Opt[], onChange: (v: string) => void) => React.ReactNode;
 }> = ({ allOptions, renderSelect }) => {
   const [model, setModel] = useState('auto');
-  const [storyHint, setStoryHint] = useState(false);
   const [usable, setUsable] = useState<Opt[]>([]);
   const [results, setResults] = useState<Result[]>([]);
   const [testing, setTesting] = useState<string | null>(null);
 
   useEffect(() => {
-    void window.electronAPI.getFillerConfig?.().then((c) => { setModel(c.model); setStoryHint(c.storyHint); }).catch(() => {});
+    void window.electronAPI.getFillerConfig?.().then((c) => { setModel(c.model); }).catch(() => {});
   }, []);
 
   const key = allOptions.map((o) => o.id).join(',');
@@ -65,23 +64,10 @@ export const FillerModelCard: React.FC<{
         <div className="aip-feature-copy">
           <h3 className="block text-xs font-medium uppercase tracking-wide mb-0 aip-hero">Filler Model</h3>
           <p className="aip-meta mt-1">
-            Gives you an opening line while the answer loads. Auto chooses your fastest available model.
+            Runs alongside the main model and shows a complete opening sentence. Auto chooses your fastest available model.
           </p>
         </div>
         {renderSelect(model, options, choose)}
-      </div>
-
-      <div className="aip-feature-row">
-        <div className="flex-1 min-w-0">
-          <span className="text-[12px]" style={{ color: 'var(--aip-primary)' }}>Hint at the matching story</span>
-          <p className="aip-meta mt-0.5">Mention a relevant experience from My Context in the opening line.</p>
-        </div>
-        <AipSwitch
-          checked={storyHint}
-          hardDisabled={model === 'off'}
-          label="Hint at the matching story"
-          onChange={(v) => { setStoryHint(v); void window.electronAPI.setFillerStoryHint?.(v); }}
-        />
       </div>
 
       <div className="aip-feature-list">

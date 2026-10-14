@@ -9730,6 +9730,10 @@ let isMultimodal = !!(imagePaths?.length);
       // May be empty (the filter is holding a partial tag) — never yield an
       // empty chunk, or trackCommit's non-empty predicate sees needless churn.
       const visible = visibleOf(reasoningFilter.feed(chunk));
+      // Personal build: a late opening must not appear after the answer starts.
+      if (visible && profile !== 'long_form') {
+        try { require('./llm/filler').markMainAnswerStarted(abortSignal); } catch { /* optional opening */ }
+      }
       if (visible) yield dashReducer.reduce(visible);
       // Count what the USER actually receives against the runaway cap. Charging
       // suppressed reasoning to the ceiling would end long answers early on a
@@ -10766,6 +10770,14 @@ let isMultimodal = !!(imagePaths?.length);
     // Determine the system prompt to use
     // logic: if override provided, use it. otherwise use HARD_SYSTEM_PROMPT (which is the universal base)
     let baseSystemPrompt = systemPromptOverride || HARD_SYSTEM_PROMPT;
+    // Personal build: complementary roles for the parallel opening and answer.
+    // Keep provider-specific prompts intact and leave Filler Off unchanged.
+    let withParallelOpening = (prompt: string) => prompt;
+    try {
+      const filler = require('./llm/filler') as typeof import('./llm/filler');
+      const enabled = Boolean(filler.resolveFillerModel(this));
+      withParallelOpening = (prompt: string) => filler.withParallelMainOpening(prompt, enabled);
+    } catch { /* opening coordination must never block the answer */ }
     // Document-grounded custom mode (audit 2026-06-28, weak-model real-path
     // fix): append the greeting-suppression + answer-directly override at the
     // SOURCE. This runs INSIDE streamChat so it applies on EVERY entry point
@@ -10776,7 +10788,7 @@ let isMultimodal = !!(imagePaths?.length);
       const { shapeDocumentGroundedSystemPrompt } = require('./llm/documentGroundedPrompt');
       baseSystemPrompt = shapeDocumentGroundedSystemPrompt(baseSystemPrompt, true);
     }
-    const finalSystemPrompt = this.injectLanguageInstruction(baseSystemPrompt);
+    const finalSystemPrompt = this.injectLanguageInstruction(withParallelOpening(baseSystemPrompt));
     let combinedContext = context;
 
     // Helper to build combined user message
@@ -11388,7 +11400,7 @@ let isMultimodal = !!(imagePaths?.length);
       if (this.groqClient && !this._groqLocalDisabled) {
         console.log(`[LLMHelper] ⚡️ Fast Mode fallback (Streaming): routing to Groq...`);
         try {
-          const groqSystem = systemPromptOverride || GROQ_SYSTEM_PROMPT;
+          const groqSystem = withParallelOpening(systemPromptOverride || GROQ_SYSTEM_PROMPT);
           const finalGroqSystem = this.injectLanguageInstruction(groqSystem);
           // Only thread currentModelId when it's actually a Groq model; otherwise
           // we'd send 'natively' or a Gemini ID as the Groq model name → 400.
@@ -11526,7 +11538,7 @@ let isMultimodal = !!(imagePaths?.length);
 
     // OpenAI
     if (this.isOpenAiModel(this.currentModelId) && this.openaiClient) {
-      const openAiSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
+      const openAiSystem = withParallelOpening(systemPromptOverride || OPENAI_SYSTEM_PROMPT);
       const finalOpenAiSystem = this.injectLanguageInstruction(openAiSystem);
       // Single terminal rung, same as Custom/LiteLLM/NIM: a well-known endpoint
       // is usually fast, but nothing sits behind it, and a stall throws nothing
@@ -11544,7 +11556,7 @@ let isMultimodal = !!(imagePaths?.length);
 
     // Claude
     if (this.isClaudeModel(this.currentModelId) && this.claudeClient) {
-      const claudeSystem = systemPromptOverride || CLAUDE_SYSTEM_PROMPT;
+      const claudeSystem = withParallelOpening(systemPromptOverride || CLAUDE_SYSTEM_PROMPT);
       const finalClaudeSystem = this.injectLanguageInstruction(claudeSystem);
       yield* this.streamSelectedProviderWithFailover({
         id: 'claude', name: 'Claude',
@@ -11561,7 +11573,7 @@ let isMultimodal = !!(imagePaths?.length);
     // chain above took it (and since 2026-10-01 seats a selected DeepSeek Flash
     // there). The guard stays so this branch can never send an image itself.
     if (this.isDeepseekModel(this.currentModelId) && this.deepseekClient && !(isMultimodal && imagePaths)) {
-      const deepseekSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
+      const deepseekSystem = withParallelOpening(systemPromptOverride || OPENAI_SYSTEM_PROMPT);
       const finalDeepseekSystem = this.injectLanguageInstruction(deepseekSystem);
       yield* this.streamSelectedProviderWithFailover({
         id: 'deepseek', name: 'DeepSeek',
@@ -11575,7 +11587,7 @@ let isMultimodal = !!(imagePaths?.length);
     }
 
     if (this.isOpenRouterModel(this.currentModelId) && this.openrouterClient) {
-      const orSystem = this.injectLanguageInstruction(systemPromptOverride || OPENAI_SYSTEM_PROMPT);
+      const orSystem = this.injectLanguageInstruction(withParallelOpening(systemPromptOverride || OPENAI_SYSTEM_PROMPT));
       // Same treatment as Custom / LiteLLM / NIM: the upstream OpenRouter picks
       // may be queueing or cold, so this rung gets failover rather than being a
       // single terminal attempt.

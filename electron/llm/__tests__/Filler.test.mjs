@@ -44,14 +44,15 @@ test('off and unsupported picks give no model; explicit pick is honoured', () =>
   assert.equal(F.resolveFillerModel(h, 'm-b'), 'm-b');
 });
 
-test('prompt: no facts rule, longer for behavioural, story hint and recent lines only when given', () => {
+test('prompt: complete neutral opening with no story choice, independent of question type', () => {
   const short = F.buildFillerPrompt('Why do you want this job?');
-  assert.match(short.system, /10 to 16 words/);
+  assert.match(short.system, /6 to 12 words/);
   assert.match(short.system, /NEVER state any fact/);
   assert.doesNotMatch(short.system, /MAY say which experience/);
-  const long = F.buildFillerPrompt('Tell me about a time you disagreed with a teammate', { storyHint: 'blocking an intern\'s PR', recentLines: ['Okay so, disagreeing…'] });
-  assert.match(long.system, /18 to 26 words/);
-  assert.match(long.system, /blocking an intern's PR/);
+  const long = F.buildFillerPrompt('Tell me about a time you disagreed with a teammate', { recentLines: ['Okay so, disagreeing…'] });
+  assert.match(long.system, /6 to 12 words/);
+  assert.match(long.system, /Never select or name a story/);
+  assert.match(long.system, /End with terminal punctuation/);
   assert.match(long.system, /Okay so, disagreeing/);
   assert.ok(long.user.startsWith('Question: Tell me about a time you disagreed with a teammate\n'));
 });
@@ -62,12 +63,40 @@ test('voice comes only from style-like sections', () => {
   assert.doesNotMatch(v, /secret fact/);
 });
 
-test('runFiller streams cleaned chunks and returns the line', async () => {
+test('runFiller publishes one complete sentence and omits a following sentence', async () => {
   const got = [];
-  const h = fakeHelper(['"Yeah, ', 'a time I disagreed', ' [[GIST]]… okay so"']);
+  const h = fakeHelper(['"Here is ', 'how I would ', 'approach that." Another sentence.']);
   const text = await F.runFiller({ helper: h, question: 'Tell me about a time you disagreed', signal: new AbortController().signal, onToken: (c) => got.push(c) });
-  assert.equal(text, 'Yeah, a time I disagreed, okay so');
-  assert.equal(got.join(''), 'Yeah, a time I disagreed, okay so');
+  assert.equal(text, 'Here is how I would approach that.');
+  assert.deepEqual(got, ['Here is how I would approach that.']);
+});
+
+test('partial, oversized and interrupted openings are never published', async () => {
+  for (const chunks of [['Okay, so'], ['An unfinished opening\nAnother line.'], ['x'.repeat(180) + '.']]) {
+    const got = [];
+    const text = await F.runFiller({ helper: fakeHelper(chunks), question: 'How?', signal: new AbortController().signal, onToken: c => got.push(c) });
+    assert.equal(text, ''); assert.deepEqual(got, []);
+  }
+  const ac = new AbortController(); const got = [];
+  const helper = fakeHelper(['An unfinished ', 'opening.'], { delayMs: 20 });
+  const pending = F.runFiller({ helper, question: 'How?', signal: ac.signal, onToken: c => got.push(c) });
+  await new Promise(r => setTimeout(r, 25)); ac.abort();
+  assert.equal(await pending, ''); assert.deepEqual(got, []);
+});
+
+test('a faster main answer suppresses its late opening without waiting for filler', async () => {
+  const ac = new AbortController(); const got = [];
+  const pending = F.runFiller({ helper: fakeHelper(['Here is ', 'how I would approach that.'], { delayMs: 20 }), question: 'How?', signal: ac.signal, onToken: c => got.push(c) });
+  await new Promise(r => setTimeout(r, 25)); F.markMainAnswerStarted(ac.signal);
+  assert.equal(await pending, ''); assert.deepEqual(got, []);
+});
+
+test('main opening rule preserves the base prompt, is idempotent and leaves Off unchanged', () => {
+  const base = 'Use only grounded facts. Return JSON when requested.';
+  assert.equal(F.withParallelMainOpening(base, false), base);
+  const enabled = F.withParallelMainOpening(base, true);
+  assert.ok(enabled.startsWith(base)); assert.match(enabled, /Begin directly with the first substantive point/);
+  assert.equal(F.withParallelMainOpening(enabled, true), enabled);
 });
 
 test('runFiller is silent on failure and on an aborted answer', async () => {

@@ -1,17 +1,21 @@
 // Personal build (Natively Z): filler / bridge line.
 //
 // When a live question triggers an answer, a fast model streams a short spoken
-// acknowledgement + thinking-aloud line IN PARALLEL with the main answer, so the
+// complete, neutral opening sentence IN PARALLEL with the main answer, so the
 // user can start talking at once. It never waits for, feeds, or replaces the main
 // answer, and any failure is silent. Design: docs/filler-design.md (workspace).
 
-import { readMyContext, selectMyContext } from './myContext';
+import { readMyContext } from './myContext';
 
 export const FILLER_HARD_STOP_MS = 6000;
 const FILLER_MAX_CHARS = 240;
 const RECENT_KEEP = 5;
 
 export type FillerSetting = 'auto' | 'off' | string;
+const mainAnswersStarted = new WeakSet<AbortSignal>();
+export function markMainAnswerStarted(signal?: AbortSignal): void {
+    if (signal) mainAnswersStarted.add(signal);
+}
 
 export interface FillerHelper {
     canDispatchFillerModel(modelId: string): boolean;
@@ -79,7 +83,12 @@ export function resolveFillerModel(helper: FillerHelper, setting: FillerSetting 
 }
 
 // ── Prompt ──
-const BEHAVIOURAL_RE = /\b(tell me about (a|an|the|one) (time|situation|moment|project)|describe (a|an|the) (time|situation)|walk me through|give (me )?an example|how did you (handle|deal)|what (was|is) (the|your) (hardest|biggest|toughest|most))/i;
+export const PARALLEL_MAIN_OPENING_RULE = 'A separate parallel model may show a short, complete conversational opening. Begin directly with the first substantive point: no acknowledgement, repeated question, topic echo, or second introduction. Do not assume a particular opening was shown or refer to it. Your answer must stand on its own. Preserve grounding and any explicitly requested code, JSON, or other output format.';
+
+export function withParallelMainOpening(prompt: string, enabled: boolean): string {
+    return enabled && !prompt.includes(PARALLEL_MAIN_OPENING_RULE)
+        ? `${prompt}\n\n${PARALLEL_MAIN_OPENING_RULE}` : prompt;
+}
 
 const recent: string[] = [];
 
@@ -90,32 +99,37 @@ export function voiceFromContext(text: string): string {
     return voice.join('\n').trim().slice(0, 900);
 }
 
-export function buildFillerPrompt(question: string, opts: { voice?: string; recentLines?: string[]; storyHint?: string } = {}): { system: string; user: string } {
-    const long = BEHAVIOURAL_RE.test(question);
-    const words = long ? '18 to 26' : '10 to 16';
+export function buildFillerPrompt(question: string, opts: { voice?: string; recentLines?: string[] } = {}): { system: string; user: string } {
+    const words = '6 to 12';
     const system = [
         'You write the first few words a person says out loud right after being asked a question in a live conversation or interview, to fill the pause while they gather their thoughts.',
-        `Write ONE line of ${words} words, spoken, casual, first person.`,
+        `Write ONE short, COMPLETE sentence of ${words} words, spoken, casual, first person. Use the same language as the question unless the supplied voice instructions specify otherwise.`,
         'You ARE that person (a human), never an assistant or an AI. Never offer help or ask how you can help.',
-        'Start the way a real person starts answering out loud: a quick acknowledgement that echoes the topic in the asker\'s own words, then the opening words of the answer itself, setting it up without saying anything specific yet.',
+        'Write a neutral conversational opening that can be followed immediately by the first substantive point. Do not repeat the question or choose the direction of the answer.',
         'Do NOT narrate your thinking: never "let me think", "where do I start", "how do I put this", "good question", "hmm". At most ONE filler word (like "so", "yeah" or "okay"). No "..." pauses: use commas.',
         'NEVER state any fact, name, company, number, date, opinion, decision or the answer itself. Never say "great question". No lists, no quotes, no emojis.',
         'Do not invent details like a time, place or scene ("that afternoon", "back in college"), and no slogans or vague claims ("AI changes everything"). Keep it plain and literal.',
-        opts.storyHint ? `You MAY say which experience you are about to talk about using only these words: "${opts.storyHint}". Nothing else about it.` : '',
+        'Never select or name a story, experience, employer, project, reason, opinion, or number of points. The main answer independently selects those details.',
         opts.voice ? `Sound like this person (style only, do not use any facts from it):\n${opts.voice}` : '',
         opts.recentLines?.length ? `Do not reuse the wording of these earlier lines:\n${opts.recentLines.map((l) => `- ${l}`).join('\n')}` : '',
-        'The line must END BEFORE the first real point of the answer: finish on an open lead-in (a comma, "so", "and"), never with the answer, a trait, a reason or an example.',
+        'End with terminal punctuation. Never end on an unfinished clause, a comma, colon, ellipsis, "so", "and", or "because". Do not require the next sentence to complete yours.',
         'Output only the line, on one line.',
     ].filter(Boolean).join('\n');
     return { system, user: `Question: ${question.trim()}
 Write only the filler line (${words} words, no facts).` };
 }
 
-function storyHintFor(question: string, text: string): string | undefined {
-    if (settings()?.get('fillerStoryHint') !== true || !text) return undefined;
-    const top = selectMyContext(text, question, 1).stories[0];
-    // "Mentoring / coaching: onboarding interns at ZuraLog" → "onboarding interns at ZuraLog"
-    return top ? top.split(':').pop()!.trim() || undefined : undefined;
+/** Only commit a complete opening; partial provider output must never be read. */
+export function completeFillerSentence(text: string, maxChars = 160): string {
+    const line = cleanFillerChunk(text).split(/[\r\n]/, 1)[0].trim();
+    const ending = /[.!?。！？](?=\s|$)/g;
+    for (const match of line.matchAll(ending)) {
+        const sentence = line.slice(0, match.index! + 1).trim();
+        if (sentence.length > maxChars) return '';
+        if (/\.{2,}|…/.test(sentence) || /\b(so|and|because|but|or|then)[.!?]$/i.test(sentence)) return '';
+        return sentence;
+    }
+    return '';
 }
 
 /**
@@ -149,7 +163,6 @@ const SERVICE_NOTICE_RE = /\b(no longer available|(is|are) (not|currently) avail
 export function looksLikeServiceNotice(text: string): boolean {
     return SERVICE_NOTICE_RE.test(String(text || '').slice(0, 200));
 }
-const NOTICE_CHECK_CHARS = 40;
 
 export function cleanFillerChunk(s: string): string {
     // "..." pauses read as robotic in a spoken line: turn them into a comma.
@@ -157,7 +170,7 @@ export function cleanFillerChunk(s: string): string {
 }
 
 /**
- * Fire-and-forget. Streams the filler line through onToken; resolves when done.
+ * Fire-and-forget. Buffers a complete sentence, then publishes it once.
  * Never throws. Stops on signal abort, after FILLER_HARD_STOP_MS, or at FILLER_MAX_CHARS.
  */
 export async function runFiller(input: {
@@ -167,7 +180,7 @@ export async function runFiller(input: {
     onToken: (chunk: string) => void;
 }): Promise<string> {
     const question = String(input.question || '').trim();
-    if (!question || input.signal.aborted) return '';
+    if (!question || input.signal.aborted || mainAnswersStarted.has(input.signal)) return '';
     let modelId: string | null = null;
     try {
         modelId = resolveFillerModel(input.helper);
@@ -176,29 +189,29 @@ export async function runFiller(input: {
         const { system, user } = buildFillerPrompt(question, {
             voice: voiceFromContext(ctx),
             recentLines: recent,
-            storyHint: storyHintFor(question, ctx),
         });
         const signal = AbortSignal.any([input.signal, AbortSignal.timeout(FILLER_HARD_STOP_MS)]);
-        const maxChars = BEHAVIOURAL_RE.test(question) ? 190 : 130;
+        const maxChars = 160;
         const t0 = Date.now();
         let text = '';
-        let held = '';
-        let checked = false;
+        let buffer = '';
         for await (const raw of input.helper.streamFillerLine(modelId, system, user, signal)) {
-            if (signal.aborted) break;
+            if (signal.aborted || mainAnswersStarted.has(input.signal)) return '';
             const chunk = cleanFillerChunk(String(raw ?? ''));
             if (!chunk) continue;
-            if (!text && !held) noteFirstToken(modelId, Date.now() - t0);
-            const { piece, done } = nextFillerPiece(text + held, chunk, maxChars);
-            // Hold the first few words until we know it's not a service notice, then stream normally.
-            if (!checked) {
-                held += piece;
-                if (held.length >= NOTICE_CHECK_CHARS || done) { checked = true; if (looksLikeServiceNotice(held)) throw new Error(`service notice: ${held.slice(0, 80)}`); text = held; input.onToken(held); held = ''; }
-            } else if (piece) { text += piece; input.onToken(piece); }
-            if (done) break;
+            if (!buffer) noteFirstToken(modelId, Date.now() - t0);
+            buffer += chunk;
+            if (looksLikeServiceNotice(buffer)) throw new Error(`service notice: ${buffer.slice(0, 80)}`);
+            text = completeFillerSentence(buffer, maxChars);
+            if (text) break;
+            if (buffer.length > maxChars || /[\r\n]/.test(buffer)) break;
         }
-        if (held) { if (looksLikeServiceNotice(held)) throw new Error(`service notice: ${held.slice(0, 80)}`); text += held; input.onToken(held); }
-        text = text.trim();
+        if (signal.aborted || mainAnswersStarted.has(input.signal)) return '';
+        if (!text) {
+            noteFirstToken(modelId, FILLER_HARD_STOP_MS * 10);
+            return '';
+        }
+        input.onToken(text);
         if (text) {
             recent.push(text);
             if (recent.length > RECENT_KEEP) recent.shift();
