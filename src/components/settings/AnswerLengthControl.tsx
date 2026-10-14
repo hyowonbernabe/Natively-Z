@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { AlignLeft } from 'lucide-react';
 import type { AnswerLength } from '../../../electron/llm/answerLength';
 import { SettingsRow, SettingsSectionHeading } from './SettingsRow';
@@ -11,6 +11,7 @@ const options: { value: AnswerLength; label: string; description: string }[] = [
 ];
 
 export function AnswerLengthControl({ compact = false, dark = false }: { compact?: boolean; dark?: boolean }) {
+    const controlId = useId();
     const [length, setLength] = useState<AnswerLength | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
@@ -37,7 +38,7 @@ export function AnswerLengthControl({ compact = false, dark = false }: { compact
         catch { setError('Could not save. Try again.'); }
         finally { setBusy(false); }
     };
-    const select = <select aria-label="Answer length" value={length || 'auto'} disabled={length === null || busy}
+    const select = <select id={controlId} aria-label="Answer length" value={length || 'auto'} disabled={length === null || busy}
         onChange={event => { void change(event.target.value as AnswerLength); }}
         className={compact
             ? `w-full rounded-md border px-2 py-1.5 text-[11px] disabled:opacity-50 ${dark ? 'border-white/15 bg-zinc-900 text-white' : 'border-black/15 bg-white text-slate-900'}`
@@ -46,7 +47,7 @@ export function AnswerLengthControl({ compact = false, dark = false }: { compact
     </select>;
     const description = options.find(option => option.value === length)?.description;
     if (compact) return <div className={`mx-2 my-2 border-t pt-2 ${dark ? 'border-white/10 text-white/80' : 'border-black/10 text-slate-700'}`}>
-        <label className="mb-1.5 block text-[11px] font-medium">Answer length</label>{select}
+        <label htmlFor={controlId} className="mb-1.5 block text-[11px] font-medium">Answer length</label>{select}
         <p className="mt-1 text-[10px] leading-relaxed" role={error ? 'alert' : undefined}>{error || 'Applies to new answers.'}</p>
     </div>;
     return <section className="mt-6 border-t border-border-subtle pt-6">
