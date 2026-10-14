@@ -793,6 +793,19 @@ export interface ElectronAPI {
   setContextDebugLevel: (level: 'off' | 'standard' | 'verbose') => Promise<{ ok: boolean; error?: string }>
   openContextDebugFolder: () => Promise<{ ok: boolean; error?: string }>
   getMyContext: () => Promise<{ path: string | null; enabled: boolean; exists: boolean; chars: number }>
+  getMockInterview: () => Promise<import('../../electron/services/mock-interview/types').InterviewState>
+  getMockInterviewHistory: () => Promise<import('../../electron/services/mock-interview/types').InterviewSession[]>
+  startMockInterview: (options: Partial<import('../../electron/services/mock-interview/types').InterviewOptions>) => Promise<import('../../electron/services/mock-interview/types').InterviewResult>
+  nextMockInterview: () => Promise<import('../../electron/services/mock-interview/types').InterviewResult>
+  setMockInterviewDraft: (text: string) => Promise<import('../../electron/services/mock-interview/types').InterviewResult>
+  setMockInterviewAuto: (enabled: boolean, seconds: number) => Promise<import('../../electron/services/mock-interview/types').InterviewResult>
+  replayMockInterview: () => Promise<import('../../electron/services/mock-interview/types').InterviewResult>
+  stopMockInterviewSpeech: () => Promise<import('../../electron/services/mock-interview/types').InterviewResult>
+  finishMockInterview: () => Promise<import('../../electron/services/mock-interview/types').InterviewResult>
+  stopMockInterview: () => Promise<import('../../electron/services/mock-interview/types').InterviewResult>
+  loadMockInterview: (id: string) => Promise<import('../../electron/services/mock-interview/types').InterviewResult>
+  exportMockInterview: () => Promise<{ success: boolean; canceled?: boolean; error?: string }>
+  onMockInterviewChanged: (callback: (state: import('../../electron/services/mock-interview/types').InterviewState) => void) => () => void
   setMyContextEnabled: (enabled: boolean) => Promise<{ path: string | null; enabled: boolean; exists: boolean; chars: number }>
   openMyContext: () => Promise<{ ok: boolean; error?: string }>
   showMyContext: () => Promise<{ ok: boolean }>

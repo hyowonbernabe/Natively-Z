@@ -1410,6 +1410,9 @@ interface CaptureChannelStartResult {
 }
 
 export class AppState {
+  // Personal build: observers reuse owned meeting streams; never open another mic.
+  public mockInterviewTranscriptObserver: ((segment: { speaker: string; text: string; final: boolean }) => void) | null = null;
+  public mockInterviewLevelObserver: ((level: number) => void) | null = null;
   private static instance: AppState | null = null
 
   private windowHelper: WindowHelper
@@ -2400,6 +2403,7 @@ export class AppState {
 
   /** Push a transcript payload to the launcher + overlay rolling-transcript bar. */
   private emitTranscriptToSurfaces(payload: { speaker: string; text: string; timestamp: number; final: boolean; confidence: number }): void {
+    this.mockInterviewTranscriptObserver?.(payload);
     const helper = this.getWindowHelper();
     this.sendToWindow(helper.getLauncherWindow(), 'native-audio-transcript', payload);
     this.sendToWindow(helper.getOverlayWindow(), 'native-audio-transcript', payload);
@@ -6233,7 +6237,7 @@ export class AppState {
   private _audioTestUsesMeetingCapture = false;
 
   private publishMeetingAudioLevel(channel: 'mic' | 'system', chunk: Buffer): void {
-    if (!this._audioTestUsesMeetingCapture) return;
+    if (!this._audioTestUsesMeetingCapture && !(channel === 'mic' && this.mockInterviewLevelObserver)) return;
     let sum = 0;
     let count = 0;
     for (let i = 0; i + 1 < chunk.length; i += 20) {
@@ -6242,6 +6246,8 @@ export class AppState {
       count++;
     }
     const level = count ? Math.min(Math.sqrt(sum / count) / 10000, 1) : 0;
+    if (channel === 'mic') this.mockInterviewLevelObserver?.(level);
+    if (!this._audioTestUsesMeetingCapture) return;
     const event = channel === 'mic' ? 'audio-test-level' : 'audio-test-system-level';
     for (const target of [this.settingsWindowHelper.getSettingsWindow(), this.getWindowHelper().getLauncherWindow(), this.getWindowHelper().getOverlayWindow()]) {
       if (target && !target.isDestroyed()) this.sendToWindow(target, event, level);
@@ -6667,7 +6673,7 @@ export class AppState {
     // before the renderer's follow-up setWindowMode('overlay') hides it —
     // visible as a flash. Switching first means the launcher hides before
     // the state event arrives, so the user only ever sees the overlay.
-    this.windowHelper.setWindowMode('overlay');
+    this.windowHelper.setWindowMode(metadata?.mockInterview === true ? 'launcher' : 'overlay');
 
     const meetingGeneration = ++this._meetingGeneration;
     this.isMeetingActive = true;

@@ -20,6 +20,8 @@ import { useResolvedTheme } from '../hooks/useResolvedTheme';
 import { isMac } from '../utils/platformUtils';
 import { APP_FEATURE_VERSION } from '../utils/appVersion';
 import WindowControls from './WindowControls';
+import { MockInterview } from './MockInterview';
+import { MessageSquare } from 'lucide-react';
 import { LiquidGlassBadge } from '../ui-components/LiquidGlassBadge';
 import { emitOrchestratorEvent, setUserState as setOrchestratorUserState } from './onboarding/OrchestratedToasterHost';
 
@@ -99,6 +101,7 @@ const Launcher: React.FC<LauncherProps> = ({ request, onStartMeeting, onOpenSett
     const [meetings, setMeetings] = useState<Meeting[]>([]);
     const [isDetectable, setIsDetectable] = useState(false);
     const [isMeetingActive, setIsMeetingActive] = useState(false);
+    const [mockInterviewOpen, setMockInterviewOpen] = useState(false);
     const [selectedMeeting, setSelectedMeeting] = useState<Meeting | null>(null);
     // The notes page's "ask about this meeting" chat is open. See the details
     // panel's z-index below.
@@ -1185,6 +1188,9 @@ const Launcher: React.FC<LauncherProps> = ({ request, onStartMeeting, onOpenSett
                                     </div>
 
                                     {/* 2. Hero Section Cards */}
+                                    <button type="button" onClick={() => setMockInterviewOpen(true)} className="flex w-full items-center justify-between gap-3 rounded-xl border border-border-subtle bg-bg-card px-4 py-3 text-left text-text-primary hover:bg-bg-elevated">
+                                        <span className="flex items-center gap-3"><MessageSquare size={18} /><span><span className="block text-sm font-medium">Mock interview</span><span className="block text-xs text-text-secondary">Spoken questions, your answers, and feedback—all here.</span></span></span><ChevronRight size={16} />
+                                    </button>
                                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3 h-[198px]">
                                         {/* Default Intro — natively support & upcoming features.
                                             Calendar "Up Next" lives in Settings → Calendar, not here. */}
@@ -1387,6 +1393,7 @@ const Launcher: React.FC<LauncherProps> = ({ request, onStartMeeting, onOpenSett
             </AnimatePresence>
 
             {/* Global Chat Overlay */}
+            {mockInterviewOpen && <MockInterview onClose={() => { setMockInterviewOpen(false); fetchMeetings(); }} />}
             <GlobalChatOverlay
                 isOpen={isGlobalChatOpen}
                 onClose={() => {

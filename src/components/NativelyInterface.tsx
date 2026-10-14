@@ -30,6 +30,7 @@ import { categorizeSttError } from '../lib/sttErrorMapper';
 import { splitGistLine, splitGistLineStreaming, collapseBlockGaps } from '../lib/displayMarkup';
 
 import type { SkillSummary } from '../types/electron';
+import { ReturnToMockInterview } from './MockInterview';
 
 function SkillPicker({
   skills,
@@ -12353,6 +12354,7 @@ Provide only the answer, nothing else.`;
                         <button onClick={handleWhatToSay} className={chipClass} style={appearance.chipStyle}>
                           <Pencil className="w-3 h-3 opacity-70" /> {t('What to answer?')}
                         </button>
+                        <ReturnToMockInterview />
                         <button onClick={handleClarify} className={chipClass} style={appearance.chipStyle}>
                           <MessageSquare className="w-3 h-3 opacity-70" /> {t('Clarify')}
                         </button>

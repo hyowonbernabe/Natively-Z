@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { InterviewOptions, InterviewState, InterviewSession, InterviewResult } from './services/mock-interview/types';
 import type { SkillUploadPayload } from './services/skills/SkillValidator';
 import type { NativelyUsageResponse, NativelyPlansResponse } from '../src/types/nativelyUsage';
 import { PAGE_CAPTURE_FALLBACK_CHANNEL, PAGE_CAPTURE_STARTED_CHANNEL, type PageCaptureFallbackNotice } from './services/pageCaptureFallback';
@@ -623,6 +624,19 @@ interface ElectronAPI {
   setContextDebugLevel: (level: 'off' | 'standard' | 'verbose') => Promise<{ ok: boolean; error?: string }>;
   openContextDebugFolder: () => Promise<{ ok: boolean; error?: string }>;
   getMyContext: () => Promise<{ path: string | null; enabled: boolean; exists: boolean; chars: number }>;
+  getMockInterview: () => Promise<InterviewState>;
+  getMockInterviewHistory: () => Promise<InterviewSession[]>;
+  startMockInterview: (options: Partial<InterviewOptions>) => Promise<InterviewResult>;
+  nextMockInterview: () => Promise<InterviewResult>;
+  setMockInterviewDraft: (text: string) => Promise<InterviewResult>;
+  setMockInterviewAuto: (enabled: boolean, seconds: number) => Promise<InterviewResult>;
+  replayMockInterview: () => Promise<InterviewResult>;
+  stopMockInterviewSpeech: () => Promise<InterviewResult>;
+  finishMockInterview: () => Promise<InterviewResult>;
+  stopMockInterview: () => Promise<InterviewResult>;
+  loadMockInterview: (id: string) => Promise<InterviewResult>;
+  exportMockInterview: () => Promise<{ success: boolean; canceled?: boolean; error?: string }>;
+  onMockInterviewChanged: (callback: (state: InterviewState) => void) => () => void;
   setMyContextEnabled: (enabled: boolean) => Promise<{ path: string | null; enabled: boolean; exists: boolean; chars: number }>;
   openMyContext: () => Promise<{ ok: boolean; error?: string }>;
   showMyContext: () => Promise<{ ok: boolean }>;
@@ -2276,6 +2290,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setContextDebugLevel: (level: 'off' | 'standard' | 'verbose') => ipcRenderer.invoke('context-debug:set-level', { level }),
   openContextDebugFolder: () => ipcRenderer.invoke('context-debug:open-folder'),
   getMyContext: () => ipcRenderer.invoke('my-context:get'),
+  getMockInterview: () => ipcRenderer.invoke('mock-interview:get'),
+  getMockInterviewHistory: () => ipcRenderer.invoke('mock-interview:history'),
+  startMockInterview: (options) => ipcRenderer.invoke('mock-interview:start', options),
+  nextMockInterview: () => ipcRenderer.invoke('mock-interview:next'),
+  setMockInterviewDraft: (text) => ipcRenderer.invoke('mock-interview:draft', text),
+  setMockInterviewAuto: (enabled, seconds) => ipcRenderer.invoke('mock-interview:auto', enabled, seconds),
+  replayMockInterview: () => ipcRenderer.invoke('mock-interview:replay'),
+  stopMockInterviewSpeech: () => ipcRenderer.invoke('mock-interview:stop-speaking'),
+  finishMockInterview: () => ipcRenderer.invoke('mock-interview:finish'),
+  stopMockInterview: () => ipcRenderer.invoke('mock-interview:stop'),
+  loadMockInterview: (id) => ipcRenderer.invoke('mock-interview:load', id),
+  exportMockInterview: () => ipcRenderer.invoke('mock-interview:export'),
+  onMockInterviewChanged: (callback) => {
+    const listener = (_event: unknown, state: InterviewState) => callback(state);
+    ipcRenderer.on('mock-interview:changed', listener);
+    return () => ipcRenderer.removeListener('mock-interview:changed', listener);
+  },
   setMyContextEnabled: (enabled: boolean) => ipcRenderer.invoke('my-context:set-enabled', enabled),
   openMyContext: () => ipcRenderer.invoke('my-context:open'),
   showMyContext: () => ipcRenderer.invoke('my-context:show'),

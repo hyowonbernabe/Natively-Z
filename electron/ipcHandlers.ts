@@ -8656,6 +8656,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   // Personal build (Natively Z): Settings → Intelligence → My Context.
   require('./llm/myContext').registerMyContextIpc(safeHandle);
+  require('./services/mock-interview/mockInterviewIpc').registerMockInterviewIpc(appState, safeHandle);
   require('./llm/filler').registerFillerIpc(safeHandle, () => appState.processingHelper.getLLMHelper());
   require('./llm/backupChain').registerBackupIpc(safeHandle);
 

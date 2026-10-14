@@ -5600,6 +5600,15 @@ let isMultimodal = !!(imagePaths?.length);
     return [...new Set([tier, this.fastModelId, this.currentModelId].filter((m): m is string => !!m && this.canDispatchFillerModel(m)))];
   }
 
+  /** Personal build: interviewer/coach requests use direct provider dispatch,
+   * without candidate persona, mode injection, filler or conversation memory. */
+  public streamInterview(system: string, user: string, signal: AbortSignal): AsyncGenerator<string, void, unknown> {
+    if (this.activeCurlProvider || this.customProvider) return this.streamWithCustom(user, undefined, undefined, system, signal);
+    if (!this.useOllama && this.currentModelId === 'natively') return this.streamWithNatively(user, system, undefined, signal);
+    const model = this.useOllama ? `ollama-${this.ollamaModel}` : this.currentModelId;
+    return this.streamFillerLine(model, system, user, signal);
+  }
+
   /** Streams one short filler line on an explicit model. Never touches currentModelId. */
   public streamFillerLine(modelId: string, system: string, user: string, signal: AbortSignal): AsyncGenerator<string, void, unknown> {
     if (modelId.startsWith('ollama-')) return this.streamWithOllama(user, undefined, system, undefined, signal, modelId.slice('ollama-'.length), true);
