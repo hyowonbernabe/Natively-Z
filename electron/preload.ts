@@ -627,6 +627,9 @@ interface ElectronAPI {
   getMyContext: () => Promise<{ path: string | null; enabled: boolean; exists: boolean; chars: number }>;
   getStoryPriorities: () => Promise<{ stories: string[]; priorities: import('./llm/myContext').StoryPriorities }>;
   setStoryPriorities: (priorities: import('./llm/myContext').StoryPriorities) => Promise<{ stories: string[]; priorities: import('./llm/myContext').StoryPriorities }>;
+  getAnswerLength: () => Promise<import('./llm/answerLength').AnswerLength>;
+  setAnswerLength: (length: import('./llm/answerLength').AnswerLength) => Promise<import('./llm/answerLength').AnswerLength>;
+  onAnswerLengthChanged: (callback: (length: import('./llm/answerLength').AnswerLength) => void) => () => void;
   getOutputStyle: () => Promise<import('./llm/myContext').OutputStyleConfig>;
   setOutputStyle: (config: import('./llm/myContext').OutputStyleConfig) => Promise<import('./llm/myContext').OutputStyleConfig>;
   getMockInterview: () => Promise<InterviewState>;
@@ -2298,6 +2301,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getMyContext: () => ipcRenderer.invoke('my-context:get'),
   getStoryPriorities: () => ipcRenderer.invoke('my-context:priorities:get'),
   setStoryPriorities: (priorities) => ipcRenderer.invoke('my-context:priorities:set', priorities),
+  getAnswerLength: () => ipcRenderer.invoke('answer-length:get'),
+  setAnswerLength: (length) => ipcRenderer.invoke('answer-length:set', length),
+  onAnswerLengthChanged: (callback) => {
+    const subscription = (_event: Electron.IpcRendererEvent, length: import('./llm/answerLength').AnswerLength) => callback(length);
+    ipcRenderer.on('answer-length:changed', subscription);
+    return () => ipcRenderer.removeListener('answer-length:changed', subscription);
+  },
   getOutputStyle: () => ipcRenderer.invoke('output-style:get'),
   setOutputStyle: (config) => ipcRenderer.invoke('output-style:set', config),
   getMockInterview: () => ipcRenderer.invoke('mock-interview:get'),

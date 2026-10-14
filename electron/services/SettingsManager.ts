@@ -8,6 +8,8 @@ export interface AppSettings {
     calendarFirstNameMigratedFor?: string;
     /** Personal build (Natively Z): My Context on/off. Undefined = on. */
     myContextEnabled?: boolean;
+    /** Personal build: main answer length; unset/auto preserves existing defaults. */
+    answerLength?: 'auto' | 'brief' | 'balanced' | 'detailed';
     /** Personal build: story selection preferences, separate from the context file. */
     myContextStoryPriorities?: Record<string, 'preferred' | 'normal' | 'lower'>;
     /** Personal build: speaking instructions saved independently of personal facts. */

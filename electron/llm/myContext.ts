@@ -15,6 +15,7 @@
 // once, then are excluded from personal facts. An explicitly saved style can
 // still apply when the context file is absent or disabled.
 
+import { registerAnswerLengthIpc, withAnswerLengthSystemPrompt } from './answerLength';
 import fs from 'fs';
 import path from 'path';
 
@@ -118,6 +119,7 @@ What happened, what I did, how it ended.
 `;
 
 export function registerMyContextIpc(safeHandle: (channel: string, fn: (...args: any[]) => any) => void): void {
+    registerAnswerLengthIpc(safeHandle);
     safeHandle('output-style:get', () => getOutputStyle());
     safeHandle('output-style:set', (_event: unknown, config: OutputStyleConfig) => {
         if (!config || typeof config.text !== 'string' || typeof config.enabled !== 'boolean' || config.text.length > OUTPUT_STYLE_MAX_CHARS) {
@@ -336,7 +338,7 @@ export function buildMyContextBlock(question: string, file?: string | null, log 
 export function withMyVoice(systemPrompt: string): string {
     try {
         const block = renderMyContextBlock('', '', true, false, getOutputStyleText());
-        return block ? `${systemPrompt}\n\n${block}` : systemPrompt;
+        return withAnswerLengthSystemPrompt(block ? `${systemPrompt}\n\n${block}` : systemPrompt);
     } catch {
         return systemPrompt;
     }
@@ -345,7 +347,7 @@ export function withMyVoice(systemPrompt: string): string {
 export function withMyContext(systemPrompt: string, question: string): string {
     try {
         const block = buildMyContextBlock(question);
-        return block ? `${systemPrompt}\n\n${block}` : systemPrompt;
+        return withAnswerLengthSystemPrompt(block ? `${systemPrompt}\n\n${block}` : systemPrompt);
     } catch {
         return systemPrompt;
     }

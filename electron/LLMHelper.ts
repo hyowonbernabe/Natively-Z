@@ -10786,7 +10786,9 @@ let isMultimodal = !!(imagePaths?.length);
       const filler = require('./llm/filler') as typeof import('./llm/filler');
       const enabled = Boolean(filler.resolveFillerModel(this));
       const { withOutputStyleSystemPrompt } = require('./llm/myContext') as typeof import('./llm/myContext');
-      withParallelOpening = (prompt: string) => filler.withParallelMainOpening(withOutputStyleSystemPrompt(prompt), enabled);
+      const { withAnswerLengthSystemPrompt, getAnswerLength } = require('./llm/answerLength') as typeof import('./llm/answerLength');
+      const answerLength = getAnswerLength(); // Snapshot once; a quick-setting change affects the next answer.
+      withParallelOpening = (prompt: string) => withAnswerLengthSystemPrompt(filler.withParallelMainOpening(withOutputStyleSystemPrompt(prompt), enabled), answerLength);
     } catch { /* opening coordination must never block the answer */ }
     // Document-grounded custom mode (audit 2026-06-28, weak-model real-path
     // fix): append the greeting-suppression + answer-directly override at the
