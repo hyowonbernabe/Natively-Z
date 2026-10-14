@@ -67,7 +67,7 @@ test('remote normal close reconnects; old socket callbacks cannot retire its rep
     const { stt, sockets, reconnects } = setup(); const old = sockets[0];
     try {
         const oldClose = old.listeners('close')[0];
-        old.message({ message_type: 'session_started' }); old.close();
+        old.message({ message_type: 'session_started' }); stt.setSampleRate(16000); stt.write(Buffer.alloc(3200)); old.close();
         assert.equal(reconnects.length, 1);
         clearTimeout(stt.reconnectTimer); stt.reconnectTimer = null;
         stt.connect(); const next = sockets[1];
@@ -94,7 +94,7 @@ test('sessions that repeatedly open without transcribing cannot reset the retry 
     try {
         for (let attempt = 0; attempt <= 10; attempt++) {
             const socket = sockets.at(-1);
-            socket.emit('open'); socket.message({ message_type: 'session_started' }); socket.close();
+            socket.emit('open'); socket.message({ message_type: 'session_started' }); stt.setSampleRate(16000); stt.write(Buffer.alloc(3200)); socket.close();
             if (stt.reconnectTimer) {
                 clearTimeout(stt.reconnectTimer); stt.reconnectTimer = null;
                 stt.connect();
@@ -133,4 +133,43 @@ test('48 kHz conversion attenuates an aliased tone rather than selecting every t
     for (let i = 0; i < 4800; i++) pcm.writeInt16LE(Math.round(20000 * Math.cos(i * 2 * Math.PI / 3)), i * 2);
     const out = new StreamingPcmResampler(48000).convert(pcm);
     assert.ok([...out].every(value => Math.abs(value) <= 1));
+});
+
+
+test('meeting mode does not open a billable socket for an empty audio channel', () => {
+    const sockets = [];
+    const stt = new ElevenLabsStreamingSTT('test-key', () => { const ws = new Socket(); sockets.push(ws); return ws; });
+    stt.setConnectOnAudioOnly(true); stt.start();
+    try {
+        assert.equal(sockets.length, 0);
+        stt.setSampleRate(16000); stt.write(Buffer.alloc(3200));
+        assert.equal(sockets.length, 1);
+        sockets[0].message({ message_type: 'session_started' });
+        assert.equal(sockets[0].sent.length, 1);
+    } finally { stt.stop(); }
+});
+
+test('empty remote normal close waits for real capture instead of opening an idle reconnect loop', () => {
+    const { stt, sockets, reconnects } = setup();
+    try {
+        sockets[0].message({ message_type: 'session_started' }); sockets[0].close();
+        assert.equal(stt.isActive, true); assert.equal(stt.reconnectTimer, null);
+        assert.equal(reconnects.length, 0);
+        stt.setSampleRate(16000); stt.write(Buffer.alloc(3200));
+        assert.equal(sockets.length, 2);
+    } finally { stt.stop(); }
+});
+
+test('insufficient audio is idle, whereas a rate limit is actionable and never storms', () => {
+    for (const type of ['insufficient_audio_activity', 'rate_limited']) {
+        const { stt, sockets, reconnects, errors } = setup();
+        try {
+            sockets[0].message({ message_type: 'session_started' });
+            stt.setSampleRate(16000); stt.write(Buffer.alloc(3200));
+            sockets[0].message({ message_type: type, error: 'Server notice' });
+            assert.equal(reconnects.length, 0);
+            if (type === 'insufficient_audio_activity') assert.equal(stt.isActive, true);
+            else { assert.equal(stt.isActive, false); assert.equal(errors.length, 1); }
+        } finally { stt.stop(); }
+    }
 });

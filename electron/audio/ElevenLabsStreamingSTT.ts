@@ -54,6 +54,10 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
     private readonly resampler = new StreamingPcmResampler();
     private sessionTimer: NodeJS.Timeout | null = null;
     private bufferedBytes = 0;
+    private connectOnAudioOnly = false;
+    private sessionAudioBytes = 0;
+    private lastAudioSentAt = 0;
+    private serverIdle = false;
     
     // Chunk buffering properties (100ms @ 16k — see ELEVENLABS_SEND_THRESHOLD_SAMPLES)
     private pcmAccumulator: Int16Array[] = [];
@@ -101,13 +105,15 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
     /** No-op - credentials passed via API key */
     public setCredentials(_path: string): void {}
 
+    public setConnectOnAudioOnly(enabled: boolean): void { this.connectOnAudioOnly = enabled; }
+
     public start(): void {
         if (this.isActive) return;
         if (this.isConnecting) return; // Already mid-connect (prevents double-connect race)
         this.isActive = true;          // Set immediately so write() buffers audio during WS handshake
         this.shouldReconnect = true;
         this.reconnectAttempts = 0;
-        this.connect();
+        if (!this.connectOnAudioOnly) this.connect();
     }
 
     public stop(): void {
@@ -167,6 +173,8 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
                 Buffer.from(combined.buffer, combined.byteOffset, combined.byteLength).toString('base64'),
                 false,
             )));
+            this.sessionAudioBytes += combined.byteLength;
+            this.lastAudioSentAt = Date.now();
             console.log('[ElevenLabsStreaming] Finalize — flushed pending accumulator');
         } catch (err) {
             console.error('[ElevenLabsStreaming] Finalize flush failed:', err);
@@ -242,6 +250,8 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
         while (combined.length - offset >= this.SEND_THRESHOLD_SAMPLES) {
             const part = combined.subarray(offset, offset + this.SEND_THRESHOLD_SAMPLES);
             this.ws.send(JSON.stringify(this.audioMessage(Buffer.from(part.buffer, part.byteOffset, part.byteLength).toString('base64'), false)));
+            this.sessionAudioBytes += part.byteLength;
+            this.lastAudioSentAt = Date.now();
             offset += this.SEND_THRESHOLD_SAMPLES;
         }
         const remaining = combined.slice(offset);
@@ -287,6 +297,9 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
         }) as any);
 
         this.ws = socket;
+        this.sessionAudioBytes = 0;
+        this.lastAudioSentAt = 0;
+        this.serverIdle = false;
         // A TCP upgrade is not a usable transcription session.
         this.sessionTimer = setTimeout(() => {
             if (this.ws !== socket) return;
@@ -353,6 +366,14 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
                     case 'chunk_size_exceeded':
                         this.fail(msgType, String(msg.error || 'Check your Speech-to-Text key permissions and account settings.'));
                         break;
+                    case 'rate_limited':
+                        this.fail(msgType, 'ElevenLabs rate limit reached. Wait before restarting transcription or check your account concurrency limit.');
+                        break;
+                    case 'insufficient_audio_activity':
+                        this.serverIdle = true;
+                        this.connectOnAudioOnly = true;
+                        socket.close();
+                        break;
                     case 'warning':
                         this.emit('warning', { code: 'scribe_warning', message: msg.warning });
                         break;
@@ -375,7 +396,12 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
             this.isConnecting = false;
             this.isSessionReady = false;
             console.log(`[ElevenLabsStreaming] Closed: code=${code} reason=${reason}`);
-            if (this.shouldReconnect) {
+            const idle = this.serverIdle || code === 1000 && (this.sessionAudioBytes === 0 || Date.now() - this.lastAudioSentAt > 10000);
+            this.emit('warning', { code: idle ? 'session_idle' : 'session_closed', message: `Scribe closed (${code}); ${this.sessionAudioBytes} PCM bytes sent in this session.` });
+            if (this.shouldReconnect && idle) {
+                this.connectOnAudioOnly = true;
+                this.emit('idle'); // stay active; next captured audio owns reopening
+            } else if (this.shouldReconnect) {
                 this.scheduleReconnect();
             } else {
                 // If not reconnecting, mark session as truly inactive

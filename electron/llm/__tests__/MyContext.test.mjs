@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dist = (rel) => pathToFileURL(path.resolve(here, '../../../dist-electron/electron', rel)).href;
-const { readMyContext, selectMyContext, buildMyContextBlock, splitMyContext, renderMyContextBlock, resolveOutputStyleConfig, MY_CONTEXT_MAX_CHARS } = await import(dist('llm/myContext.js'));
+const { readMyContext, selectMyContext, buildMyContextBlock, splitMyContext, renderMyContextBlock, resolveOutputStyleConfig, withOutputStyleSystemPrompt, MY_CONTEXT_MAX_CHARS } = await import(dist('llm/myContext.js'));
 
 const FILE = `# Me
 My name is Hyowon. I built Messenger Z.
@@ -173,4 +173,25 @@ test('no style section means no added speaking policy; empty and disabled contex
     if (old === undefined) delete process.env.NATIVELY_MY_CONTEXT;
     else process.env.NATIVELY_MY_CONTEXT = old;
   }
+});
+
+
+test('speaking policy treats project introductions and plain tool explanations as necessary story content', () => {
+    const block = renderMyContextBlock(FILE, 'technical challenge', false, false, 'Plain language, natural storytelling.');
+    assert.match(block, /explain what the project does/);
+    assert.match(block, /Project context is necessary substance/);
+    assert.match(block, /Explain a technical term or named tool/);
+    assert.match(block, /Never pad a simple answer or invent/);
+    assert.match(block, /Explicit user format\/length requests still win/);
+});
+
+
+test('system-level output style preserves grounding and explicit formats, disabled style leaves base intact', () => {
+    const base = 'Only grounded facts. Return JSON if requested.';
+    const styled = withOutputStyleSystemPrompt(base, 'Use plain language and explain my project before its problem.');
+    assert.ok(styled.startsWith(base));
+    assert.match(styled, /<user_response_style>/);
+    assert.match(styled, /explain my project before its problem/);
+    assert.equal(withOutputStyleSystemPrompt(styled, 'Use plain language.'), styled);
+    assert.equal(withOutputStyleSystemPrompt(base, ''), base);
 });

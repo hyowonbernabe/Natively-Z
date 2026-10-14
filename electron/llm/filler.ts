@@ -83,7 +83,7 @@ export function resolveFillerModel(helper: FillerHelper, setting: FillerSetting 
 }
 
 // ── Prompt ──
-export const PARALLEL_MAIN_OPENING_RULE = 'A separate parallel model may show a short, complete conversational opening. Begin directly with the first substantive point: no acknowledgement, repeated question, topic echo, or second introduction. Do not assume a particular opening was shown or refer to it. Your answer must stand on its own. Preserve grounding and any explicitly requested code, JSON, or other output format.';
+export const PARALLEL_MAIN_OPENING_RULE = 'A separate parallel model may show a short, complete conversational opening. Begin with the substantive answer, including a short explanation of an unfamiliar project before its problem. Do not add a second generic acknowledgement or repeat the question. Project context is part of the answer, not a disposable introduction. Do not assume a particular opening was shown or refer to it. Your answer must stand on its own. Preserve grounding and any explicitly requested code, JSON, or other output format.';
 
 export function withParallelMainOpening(prompt: string, enabled: boolean): string {
     return enabled && !prompt.includes(PARALLEL_MAIN_OPENING_RULE)
@@ -100,23 +100,32 @@ export function voiceFromContext(text: string): string {
 }
 
 export function buildFillerPrompt(question: string, opts: { voice?: string; recentLines?: string[] } = {}): { system: string; user: string } {
-    const words = '6 to 12';
+    const words = '8 to 18';
     const system = [
         'You write the first few words a person says out loud right after being asked a question in a live conversation or interview, to fill the pause while they gather their thoughts.',
         `Write ONE short, COMPLETE sentence of ${words} words, spoken, casual, first person. Use the same language as the question unless the supplied voice instructions specify otherwise.`,
         'You ARE that person (a human), never an assistant or an AI. Never offer help or ask how you can help.',
-        'Write a neutral conversational opening that can be followed immediately by the first substantive point. Do not repeat the question or choose the direction of the answer.',
+        'Write a question-specific conversational opening that frames what the person is about to explain, without answering it or guessing any facts. Reuse the actual subject and requested task from the question. For a project challenge: I can share a technical challenge from one of my projects. For a disagreement: I can share a time I disagreed with a teammate. For retries: I would focus on preventing the same action from happening twice.',
         'Do NOT narrate your thinking: never "let me think", "where do I start", "how do I put this", "good question", "hmm". At most ONE filler word (like "so", "yeah" or "okay"). No "..." pauses: use commas.',
-        'NEVER state any fact, name, company, number, date, opinion, decision or the answer itself. Never say "great question". No lists, no quotes, no emojis.',
+        'NEVER invent a fact, project, bug type, cause, company, number, date, opinion, decision or the answer itself. Words and subjects explicitly supplied in the question are allowed. Never say "great question". No lists, no quotes, no emojis.',
         'Do not invent details like a time, place or scene ("that afternoon", "back in college"), and no slogans or vague claims ("AI changes everything"). Keep it plain and literal.',
-        'Never select or name a story, experience, employer, project, reason, opinion, or number of points. The main answer independently selects those details.',
+        'Never select a particular story, experience, employer, project, cause or solution not named in the question. Never imply there was a bug, memory leak, performance problem or root-cause investigation unless the question says so. Avoid empty observations such as that situation involved several approaches or that bug required tracking down the root cause. The main answer independently selects those details.',
         opts.voice ? `Sound like this person (style only, do not use any facts from it):\n${opts.voice}` : '',
         opts.recentLines?.length ? `Do not reuse the wording of these earlier lines:\n${opts.recentLines.map((l) => `- ${l}`).join('\n')}` : '',
         'End with terminal punctuation. Never end on an unfinished clause, a comma, colon, ellipsis, "so", "and", or "because". Do not require the next sentence to complete yours.',
         'Output only the line, on one line.',
     ].filter(Boolean).join('\n');
     return { system, user: `Question: ${question.trim()}
-Write only the filler line (${words} words, no facts).` };
+Write only the question-specific opening (${words} words, no invented facts).` };
+}
+
+/** Reject observed filler failures before showing them; never revise visible text. */
+export function openingFitsQuestion(line: string, question: string): boolean {
+    if (/that (?:particular )?(?:bug|situation).*(?:root cause|different .*approaches|several .*factors)/i.test(line)) return false;
+    for (const term of ['memory leaks', 'memory leak', 'bottlenecks', 'bottleneck', 'root cause', 'bug']) {
+        if (line.toLowerCase().includes(term) && !question.toLowerCase().includes(term)) return false;
+    }
+    return true;
 }
 
 /** Only commit a complete opening; partial provider output must never be read. */
@@ -206,7 +215,7 @@ export async function runFiller(input: {
             if (buffer.length > maxChars || /[\r\n]/.test(buffer)) break;
         }
         if (signal.aborted || mainAnswersStarted.has(input.signal)) return '';
-        if (!text) {
+        if (!text || !openingFitsQuestion(text, question)) {
             noteFirstToken(modelId, FILLER_HARD_STOP_MS * 10);
             return '';
         }
@@ -251,6 +260,7 @@ export async function testFillerSpeed(helper: FillerHelper, modelId: string, que
             noteFirstToken(modelId, FILLER_HARD_STOP_MS * 10);
             return { modelId, ok: false, totalMs, text: text.trim(), error: text.trim().slice(0, 120) };
         }
+        if (!openingFitsQuestion(text, question)) return { modelId, ok: false, totalMs, error: 'Opening did not fit the question.' };
         noteFirstToken(modelId, first);
         persistSpeed(modelId, first);
         const words = text.trim().split(/\s+/).filter(Boolean).length;

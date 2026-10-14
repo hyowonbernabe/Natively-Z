@@ -17,6 +17,14 @@ configured. The regular macOS and official release commands are unchanged.
 Personal context, API credentials, downloaded speech models, and settings remain
 local to your user data; they are not bundled into the installer or committed here.
 
+### Personal spoken answers
+
+Output Style in Intelligence settings controls the main system prompt as well
+as speaking preferences. Personal project answers explain what the project does
+before the challenge, connect the actions and outcome as a story, and explain
+unfamiliar tools in plain language. The parallel opening frames the question
+without choosing a project or inventing a cause; it never delays the main model.
+
 ### Spoken mock interviews
 
 With the microphone and Auto-next enabled, speak your answer and pause for the

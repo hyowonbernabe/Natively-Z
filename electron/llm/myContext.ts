@@ -246,11 +246,17 @@ function voiceInstructions(voice: string): string {
         '<user_response_style>',
         'Apply these user-provided speaking instructions to the wording of every natural-language answer, even when the question is unrelated to their background. They are instructions for HOW to answer, not facts to quote or summarize.',
         'Follow the vocabulary, tone, sentence length and detail requested below. Preserve meaning and accuracy; do not invent expertise or personal experience.',
-        'Preserve safety rules, the requested language, necessary technical precision, and explicit code, JSON or other output formats. Apply the style to explanations, not code or structured data. Respect requested detail and do not add an introduction or acknowledgement merely to sound conversational.',
+        'Preserve safety rules, the requested language, necessary technical precision, and explicit code, JSON or other output formats. Apply the style to explanations, not code or structured data. Respect requested detail. For a personal project or experience question, tell a connected story: explain what the project does and who it helps before the specific challenge, then what I tried or changed, why, the grounded outcome and what I learned. Do not assume the listener recognizes a project name. Project context is necessary substance, not a preamble to cut. Explain a technical term or named tool in everyday words when first used, or use the everyday description alone. For example, a hosted notebook with free computing resources, or a small add-on that teaches an existing AI model a specific task; do not assume the listener knows Colab or LoRA. Use natural connecting phrases sparingly, such as so, the problem was, what I did was, and that meant. For such stories, use the requested spoken duration/detail rather than a generic brevity cap; often 130 to 200 words when needed to explain the whole story. Never pad a simple answer or invent intermediate steps, tests, feelings or outcomes. No assistant-facing commentary such as I would not claim a specific test sequence; express genuinely missing personal evidence naturally. Explicit user format/length requests still win.',
         '',
         voice.replace(/<\/?(?:user_personal_context|user_response_style)>/gi, ''),
         '</user_response_style>',
     ].join('\n');
+}
+
+/** Personal build: speaking instructions are applied at the system level too. */
+export function withOutputStyleSystemPrompt(prompt: string, style = getOutputStyleText()): string {
+    return style && !prompt.includes('<user_response_style>')
+        ? `${prompt}\n\n${voiceInstructions(style)}` : prompt;
 }
 
 export function renderMyContextBlock(text: string, question: string, voiceOnly = false, log = false, outputStyle = ''): string {

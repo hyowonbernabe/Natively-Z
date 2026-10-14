@@ -3629,6 +3629,7 @@ export class AppState {
       if (apiKey) {
         console.log(`[Main] Using ElevenLabsStreamingSTT for ${speaker}`);
         stt = new ElevenLabsStreamingSTT(apiKey);
+        stt.setConnectOnAudioOnly(true);
       } else {
         console.warn(`[Main] No API key for ElevenLabs STT, falling back to GoogleSTT`);
         stt = new GoogleSTT(speaker);
@@ -3942,6 +3943,10 @@ export class AppState {
     });
 
     if (stt instanceof ElevenLabsStreamingSTT) {
+      stt.on('idle', () => {
+        _lastState = 'awaiting-audio';
+        this.sendSttStatus({ state: 'awaiting-audio', provider: sttProvider, channel: speaker } as SttStatusPayload);
+      });
       stt.on('reconnecting', (info: { attempts: number }) => {
         _lastState = 'reconnecting';
         this.sendSttStatus({ state: 'reconnecting', provider: sttProvider, channel: speaker, reconnectAttempts: info.attempts } as SttStatusPayload);

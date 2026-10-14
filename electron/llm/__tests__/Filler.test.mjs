@@ -44,14 +44,14 @@ test('off and unsupported picks give no model; explicit pick is honoured', () =>
   assert.equal(F.resolveFillerModel(h, 'm-b'), 'm-b');
 });
 
-test('prompt: complete neutral opening with no story choice, independent of question type', () => {
+test('prompt: question-specific complete opening without inventing the story', () => {
   const short = F.buildFillerPrompt('Why do you want this job?');
-  assert.match(short.system, /6 to 12 words/);
-  assert.match(short.system, /NEVER state any fact/);
+  assert.match(short.system, /8 to 18 words/);
+  assert.match(short.system, /NEVER invent a fact/);
   assert.doesNotMatch(short.system, /MAY say which experience/);
   const long = F.buildFillerPrompt('Tell me about a time you disagreed with a teammate', { recentLines: ['Okay so, disagreeing…'] });
-  assert.match(long.system, /6 to 12 words/);
-  assert.match(long.system, /Never select or name a story/);
+  assert.match(long.system, /8 to 18 words/);
+  assert.match(long.system, /Never select a particular story/);
   assert.match(long.system, /End with terminal punctuation/);
   assert.match(long.system, /Okay so, disagreeing/);
   assert.ok(long.user.startsWith('Question: Tell me about a time you disagreed with a teammate\n'));
@@ -95,7 +95,7 @@ test('main opening rule preserves the base prompt, is idempotent and leaves Off 
   const base = 'Use only grounded facts. Return JSON when requested.';
   assert.equal(F.withParallelMainOpening(base, false), base);
   const enabled = F.withParallelMainOpening(base, true);
-  assert.ok(enabled.startsWith(base)); assert.match(enabled, /Begin directly with the first substantive point/);
+  assert.ok(enabled.startsWith(base)); assert.match(enabled, /including a short explanation of an unfamiliar project/);
   assert.equal(F.withParallelMainOpening(enabled, true), enabled);
 });
 
@@ -141,4 +141,18 @@ test('service notices sent as answer text are never shown and fail the speed tes
   const r = await F.testFillerSpeed(fakeHelper([notice]), 'm-a');
   assert.equal(r.ok, false);
   assert.match(r.error, /no longer available/);
+});
+
+
+test('observed invented filler claims are suppressed before display', async () => {
+    const question = 'Tell me a technical problem you encountered in one of your projects and how you fixed it.';
+    for (const line of ['Yeah, that particular bug required tracking down the root cause.', 'So, that project involved dealing with some pretty tricky memory leaks.']) {
+        const shown = [];
+        assert.equal(await F.runFiller({ helper: fakeHelper([line]), question, signal: new AbortController().signal, onToken: text => shown.push(text) }), '');
+        assert.deepEqual(shown, []);
+    }
+    const line = 'I can share a technical challenge from one of my projects.';
+    const shown = [];
+    assert.equal(await F.runFiller({ helper: fakeHelper([line]), question, signal: new AbortController().signal, onToken: text => shown.push(text) }), line);
+    assert.deepEqual(shown, [line]);
 });
