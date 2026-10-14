@@ -225,6 +225,9 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
     }
 
     private queuePcm(pcm: Buffer): void {
+        // Native quiet keepalives are not fresh speech. Reopening on them after
+        // idle would recreate the same 15-second empty/silent session loop.
+        if (this.connectOnAudioOnly && !this.ws && !this.isConnecting && !this.reconnectTimer && pcm.every(byte => byte === 0)) return;
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.isSessionReady) {
             this.buffer.push(pcm);
             this.bufferedBytes += pcm.length;

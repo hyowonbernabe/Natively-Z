@@ -143,6 +143,8 @@ test('meeting mode does not open a billable socket for an empty audio channel', 
     try {
         assert.equal(sockets.length, 0);
         stt.setSampleRate(16000); stt.write(Buffer.alloc(3200));
+        assert.equal(sockets.length, 0, 'quiet keepalives cannot open a session');
+        stt.write(Buffer.alloc(3200, 0x11));
         assert.equal(sockets.length, 1);
         sockets[0].message({ message_type: 'session_started' });
         assert.equal(sockets[0].sent.length, 1);
@@ -156,6 +158,8 @@ test('empty remote normal close waits for real capture instead of opening an idl
         assert.equal(stt.isActive, true); assert.equal(stt.reconnectTimer, null);
         assert.equal(reconnects.length, 0);
         stt.setSampleRate(16000); stt.write(Buffer.alloc(3200));
+        assert.equal(sockets.length, 1, 'idle silence must not reopen the socket');
+        stt.write(Buffer.alloc(3200, 0x11));
         assert.equal(sockets.length, 2);
     } finally { stt.stop(); }
 });
