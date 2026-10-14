@@ -480,6 +480,7 @@ interface ElectronAPI {
       maxAttempts: number;
       terminal?: boolean;
       stuck?: boolean;
+      recovered?: boolean;
       titleKey?: string;
     }) => void,
   ) => () => void;
@@ -2090,6 +2091,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       maxAttempts: number;
       terminal?: boolean;
       stuck?: boolean;
+      recovered?: boolean;
       titleKey?: string;
     }) => void,
   ) => {

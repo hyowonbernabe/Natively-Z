@@ -17,6 +17,16 @@ configured. The regular macOS and official release commands are unchanged.
 Personal context, API credentials, downloaded speech models, and settings remain
 local to your user data; they are not bundled into the installer or committed here.
 
+### Spoken mock interviews
+
+With the microphone and Auto-next enabled, speak your answer and pause for the
+selected number of seconds. Practice moves to the next question and reviews the
+interview after the last answer; typing and Next are optional. Background meter
+noise and unchanged transcript keepalives do not extend the pause. Temporary
+transcription failures pause progression and recover without disabling Auto-next.
+Quiet microphone keepalives do not imply a permission failure; temporary capture
+warnings clear automatically when the microphone delivers activity or text again.
+
 ### Personal meeting transcription
 
 In Settings ? Audio, use **Local Models + English** for English meetings. For

@@ -1,3 +1,4 @@
+import { warningAfterAudioRecovery } from '../lib/audioCaptureRecovery.mjs';
 import { animate, AnimatePresence, motion, motionValue, useMotionValue, useTransform } from 'framer-motion';
 import {
   ArrowRight,
@@ -2967,6 +2968,10 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
 
   useEffect(() => {
     const unsub = window.electronAPI?.onAudioCaptureFailed?.((payload) => {
+      if (payload.recovered) {
+        setSystemAudioWarning(current => warningAfterAudioRecovery(current, payload.channel));
+        return;
+      }
       // Surface both 'system' and 'mic' failures. Earlier code dropped the
       // 'mic' channel under the assumption that STT status would surface
       // mic problems, but stt-status only reports WebSocket state — when
@@ -7619,6 +7624,9 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
     // Real-time Transcripts
     cleanups.push(
       window.electronAPI.onNativeAudioTranscript((transcript) => {
+        if (transcript.speaker === 'user' && transcript.text.trim()) {
+          setSystemAudioWarning(current => warningAfterAudioRecovery(current, 'mic'));
+        }
         // When Answer button is active, capture USER transcripts for voice input
         // Use ref to avoid stale closure issue
         if (isRecordingRef.current && transcript.speaker === 'user') {

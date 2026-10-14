@@ -1412,6 +1412,8 @@ interface CaptureChannelStartResult {
 export class AppState {
   // Personal build: observers reuse owned meeting streams; never open another mic.
   public mockInterviewTranscriptObserver: ((segment: { speaker: string; text: string; final: boolean }) => void) | null = null;
+  public mockInterviewSpeechObserver: ((speaking: boolean) => void) | null = null;
+  public mockInterviewSttStatusObserver: ((state: string) => void) | null = null;
   public mockInterviewLevelObserver: ((level: number) => void) | null = null;
   private static instance: AppState | null = null
 
@@ -2459,6 +2461,7 @@ export class AppState {
   }
 
   private sendSttStatus(payload: any): void {
+    if (payload.channel === 'user') this.mockInterviewSttStatusObserver?.(payload.state);
     this.sendToMeetingSurfaces('stt-status', payload);
   }
 
@@ -4309,23 +4312,14 @@ export class AppState {
       if (stuckTimer) { clearTimeout(stuckTimer); stuckTimer = null; }
     };
     (capture as any).__disarmStuckWatchdog = disarmStuckWatchdog;
-    capture.on('start', armStuckWatchdog);
+    capture.on('start', () => { chunkCount = 0; activityAnnounced = false; lastChunkAt = 0; armStuckWatchdog(); });
     capture.on('stop', disarmStuckWatchdog);
     // Inter-chunk gap tracking — see wireSystemCapture for rationale.
     let lastChunkAt = 0;
-    // Mic TCC / muted-input zero-fill detector. cpal will happily open a mic
-    // stream and deliver silent (peak=0) buffers when:
-    //   - macOS Microphone permission was revoked between TCC check and start,
-    //   - the OS muted the input via the menu bar mic indicator,
-    //   - the hardware mic is physically muted (some Jabra/Bose headsets),
-    //   - exclusive-mode contention with a meeting app (Zoom/Teams) on Windows.
-    // Same shape as the system tap zero-fill: chunks arrive on cadence but every
-    // sample is 0. Without this, the user just sees an empty user transcript
-    // and assumes the meeting itself is broken.
-    const ZEROFILL_OBSERVATION_MS = 12000;
-    let firstChunkAt = 0;
-    let zerofillLatched = false;
-    let zerofillTriggered = false;
+    // Silence-suppressed PCM deliberately contains zero keepalives. It cannot
+    // establish a permission denial or mute. Real denial/open errors use their
+    // own paths; quiet time must not produce a failure banner.
+    let activityAnnounced = false;
     // One-shot guard for the mid-meeting HFP-degradation backstop below.
     let hfpDegradationChecked = false;
     capture.on('data', (chunk: Buffer) => {
@@ -4406,35 +4400,17 @@ export class AppState {
         }
       }
 
-      if (!zerofillLatched && !zerofillTriggered) {
-        if (firstChunkAt === 0) firstChunkAt = now;
-        // B10: peak-to-peak detection — see wireSystemCapture for full rationale.
-        // Pre-fix `abs(sample) > 8` false-latched on DC bias from muted-but-biased
-        // mics (USB/Bluetooth hardware bias of ±10..±50 is common), permanently
-        // disabling the detector. Peak-to-peak (max - min) is DC-offset invariant.
-        let minS = 32767;
-        let maxS = -32768;
-        const stride = Math.max(2, (chunk.length >> 5) & ~1);
-        for (let i = 0; i + 1 < chunk.length; i += stride) {
-          const s = chunk.readInt16LE(i);
-          if (s < minS) minS = s;
-          if (s > maxS) maxS = s;
+      if (this.microphoneCapture === capture && !activityAnnounced) {
+        let minSample = 32767;
+        let maxSample = -32768;
+        for (let i = 0; i + 1 < chunk.length; i += 2) {
+          const value = chunk.readInt16LE(i);
+          minSample = Math.min(minSample, value);
+          maxSample = Math.max(maxSample, value);
         }
-        const peakToPeak = maxS - minS;
-        if (peakToPeak > 100) {
-          zerofillLatched = true;
-        } else if (now - firstChunkAt >= ZEROFILL_OBSERVATION_MS) {
-          zerofillTriggered = true;
-          console.warn(`${prefix}Mic chunks all zero-filled (peak-to-peak < 100) for ${ZEROFILL_OBSERVATION_MS / 1000}s — TCC denial or device-mute suspected.`);
-          this.sendAudioCaptureFailed( {
-            channel: 'mic',
-            message: formatPermissionMessage('mic-zero-fill'),
-            titleKey: permissionTitleKey('mic-zero-fill'),
-            attempt: 0,
-            maxAttempts: 3,
-            terminal: false,
-            stuck: true,
-          });
+        if (maxSample - minSample > 100) {
+          activityAnnounced = true;
+          this.sendAudioCaptureFailed({ channel: 'mic', recovered: true, message: '', attempt: 0, maxAttempts: 3 });
         }
       }
 
@@ -4457,6 +4433,7 @@ export class AppState {
       }
     });
     capture.on('speech_edge', (edge: SpeechEdge) => {
+      if (this.microphoneCapture === capture && edge.channel === 'user') this.mockInterviewSpeechObserver?.(edge.speaking);
     });
     // setupMicRecoveryHandler registers its own 'error' listener.
     this.setupMicRecoveryHandler();

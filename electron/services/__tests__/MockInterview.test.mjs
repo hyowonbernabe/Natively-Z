@@ -56,7 +56,7 @@ test('no answer never advances; activity during countdown resets it', async t =>
     f.service.transcript({ speaker: 'user', text: 'I fixed the issue.', final: true });
     f.advance(4000); f.service.tick();
     assert.equal(f.service.snapshot().countdown, 1);
-    f.service.microphoneLevel(0.3); f.service.tick();
+    f.service.speechActivity(true); f.service.speechActivity(false); f.service.tick();
     assert.equal(f.service.snapshot().countdown, 5);
     assert.equal(f.calls.generated.length, 1);
 });
@@ -70,6 +70,77 @@ test('silence submits the candidate answer once, including the answer in the nex
     assert.equal(f.calls.generated.length, 2);
     assert.equal(f.service.snapshot().session.turns.filter(x => x.speaker === 'candidate').length, 1);
     assert.match(f.calls.generated[1].user, /I tested the fix first/);
+});
+
+test('background microphone activity cannot indefinitely postpone a spoken answer', async t => {
+    const f = fixture(t);
+    await f.service.start({ role: 'Engineer', spoken: false, pauseSeconds: 3 });
+    f.service.transcript({ speaker: 'user', text: 'I delivered the project.', final: true });
+    for (let i = 0; i < 12; i++) {
+        f.advance(250); f.service.microphoneLevel(0.15); f.service.tick();
+    }
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.calls.generated.length, 2);
+    assert.equal(f.service.snapshot().session.turns[1].text, 'I delivered the project.');
+});
+
+test('unchanged partial keepalives do not restart the pause or finalization grace', async t => {
+    const f = fixture(t);
+    await f.service.start({ role: 'Engineer', spoken: false, pauseSeconds: 3 });
+    f.service.transcript({ speaker: 'user', text: 'I fixed the problem', final: false });
+    for (let i = 0; i < 6; i++) {
+        f.advance(1000);
+        f.service.transcript({ speaker: 'user', text: 'I fixed the problem', final: false });
+        f.service.tick();
+    }
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.calls.generated.length, 2);
+    assert.equal(f.service.snapshot().session.turns[1].text, 'I fixed the problem');
+});
+
+test('ongoing speech holds auto-next and the pause starts after its end', async t => {
+    const f = fixture(t);
+    await f.service.start({ role: 'Engineer', spoken: false, pauseSeconds: 3 });
+    f.service.speechActivity(true);
+    f.service.transcript({ speaker: 'user', text: 'My first point.', final: true });
+    f.advance(10000); f.service.tick();
+    assert.equal(f.calls.generated.length, 1);
+    f.service.speechActivity(false);
+    f.advance(2900); f.service.tick();
+    assert.equal(f.calls.generated.length, 1);
+    f.advance(200); f.service.tick();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.calls.generated.length, 2);
+});
+
+test('transcription reconnect pauses auto-next and recovery preserves the user preference', async t => {
+    const f = fixture(t);
+    await f.service.start({ role: 'Engineer', spoken: false, pauseSeconds: 3 });
+    f.service.transcript({ speaker: 'user', text: 'I tested it.', final: true });
+    f.service.transcriptionStatus('failed');
+    f.advance(10000); f.service.tick();
+    assert.equal(f.calls.generated.length, 1);
+    assert.equal(f.service.snapshot().session.options.autoAdvance, true);
+    f.service.transcriptionStatus('connected');
+    f.advance(3100); f.service.tick();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.calls.generated.length, 2);
+});
+
+test('all spoken answers advance and the final answer completes review without typing or Next', async t => {
+    const f = fixture(t);
+    await f.service.start({ role: 'Engineer', questions: 3, pauseSeconds: 3 });
+    for (let question = 1; question <= 3; question++) {
+        f.service.speechActivity(true);
+        f.service.transcript({ speaker: 'user', text: `Spoken answer ${question}.`, final: true });
+        f.service.speechActivity(false);
+        f.advance(3100); f.service.tick();
+        await new Promise(resolve => setImmediate(resolve));
+    }
+    const state = f.service.snapshot();
+    assert.equal(state.phase, 'completed'); assert.equal(state.session.status, 'completed');
+    assert.equal(state.session.turns.filter(turn => turn.speaker === 'candidate').length, 3);
+    assert.ok(state.session.feedback); assert.deepEqual(f.calls.ended, ['practice-1']);
 });
 
 test('late finals get a grace period; interims are replaced, not duplicated', async t => {

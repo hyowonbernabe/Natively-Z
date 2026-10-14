@@ -79,7 +79,6 @@ export function MockInterview({ onClose }: { onClose: () => void }) {
             if (status.channel !== 'user' || !stateRef.current.microphoneActive) return;
             if (status.state === 'failed') {
                 setMicError(status.error || 'Microphone transcription stopped. You can type your answer or restart the interview.');
-                void window.electronAPI.setMockInterviewAuto(false, stateRef.current.session?.options.pauseSeconds || 5).catch(() => {});
             } else if (status.state === 'connected') setMicError('');
         });
         closeButton.current?.focus();

@@ -29,6 +29,8 @@ export class MockInterviewService extends EventEmitter {
     private reviewing = false;
     private lastActivity = 0;
     private partialGrace = 0;
+    private speechActive = false;
+    private transcriptionAvailable = true;
     private timer: ReturnType<typeof setInterval>;
     private now: () => number;
 
@@ -97,6 +99,9 @@ export class MockInterviewService extends EventEmitter {
     async start(input: Partial<InterviewOptions>): Promise<InterviewState> {
         if (this.state.session?.status === 'active' || this.releasingCapture || this.reviewing || this.captureStart) throw new Error('Finish or stop your current interview first.');
         const options = interviewOptions(input);
+        this.speechActive = false;
+        this.transcriptionAvailable = true;
+        this.partialGrace = 0;
         this.controller.abort();
         this.controller = new AbortController();
         const session: InterviewSession = { id: crypto.randomUUID(), startedAt: this.now(), options, model: this.deps.model(), status: 'active', turns: [] };
@@ -154,6 +159,8 @@ export class MockInterviewService extends EventEmitter {
         }
         if (signal.aborted || session !== this.state.session || session.status !== 'active') return;
         this.state.phase = 'answering';
+        this.speechActive = false;
+        this.partialGrace = 0;
         this.lastActivity = 0;
         this.publish();
     }
@@ -161,16 +168,35 @@ export class MockInterviewService extends EventEmitter {
     microphoneLevel(level: number): void {
         if (!this.captureKey || !this.deps.captureIsCurrent(this.captureKey)) return;
         this.state.level = Math.min(1, Math.max(0, Number(level) || 0));
-        if (this.state.phase === 'answering' && level > 0.03) {
-            this.lastActivity = this.now();
-            this.partialGrace = 0;
+        // Meter amplitude includes background noise; it is not a speech clock.
+    }
+
+    speechActivity(speaking: boolean): void {
+        if (!this.captureKey || !this.deps.captureIsCurrent(this.captureKey) || this.state.phase !== 'answering') return;
+        this.speechActive = speaking;
+        this.lastActivity = this.now();
+        this.partialGrace = 0;
+        this.state.countdown = null;
+        this.publish();
+    }
+
+    transcriptionStatus(state: string): void {
+        if (!this.captureKey || !this.deps.captureIsCurrent(this.captureKey)) return;
+        if (state === 'failed' || state === 'reconnecting' || state === 'preparing') {
+            this.transcriptionAvailable = false;
+            this.speechActive = false;
+            this.state.countdown = null;
+        } else if (state === 'connected' || state === 'awaiting-audio') {
+            if (!this.transcriptionAvailable) this.lastActivity = this.now();
+            this.transcriptionAvailable = true;
         }
+        this.publish();
     }
 
     transcript(segment: { speaker: string; text: string; final: boolean }): void {
         if (segment.speaker !== 'user' || !this.captureKey || !this.deps.captureIsCurrent(this.captureKey) || this.state.phase !== 'answering' || this.state.session?.turns.at(-1)?.speaker !== 'interviewer') return;
         const text = segment.text.trim().slice(0, 5000);
-        if (!text) return;
+        if (!text || (!segment.final && text === this.state.partial)) return;
         // Ignore an exact echoed question, but keep candidate wording intact.
         const question = this.state.session?.turns.filter(t => t.speaker === 'interviewer').at(-1)?.text;
         const normalize = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
@@ -217,6 +243,10 @@ export class MockInterviewService extends EventEmitter {
         if (this.state.microphoneActive && this.state.phase === 'answering') this.publish();
         const options = this.state.session?.options;
         if (!options || !options.autoAdvance || !this.state.microphoneActive || this.state.phase !== 'answering' || this.state.error) return;
+        if (!this.transcriptionAvailable || this.speechActive) {
+            if (this.state.countdown !== null) { this.state.countdown = null; this.publish(); }
+            return;
+        }
         const remaining = pauseCountdown(this.now(), this.lastActivity, options.pauseSeconds, Boolean((this.state.draft + this.state.partial).trim()));
         if (remaining !== this.state.countdown) { this.state.countdown = remaining; this.publish(); }
         if (remaining === 1) this.deps.finalizeMicrophone();

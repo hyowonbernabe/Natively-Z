@@ -424,7 +424,7 @@ export interface ElectronAPI {
   // generic one.
   onSystemAudioPermissionDenied: (callback: (message: string, titleKey?: string) => void) => () => void
   onDeviceSelectionApplied: (callback: (payload: { kind: 'input' | 'output'; requested: string | null; actual: string | null; fellBack: boolean; reason?: string }) => void) => () => void
-  onAudioCaptureFailed: (callback: (payload: { channel: 'system' | 'mic'; message: string; attempt: number; maxAttempts: number; terminal?: boolean; stuck?: boolean; titleKey?: string }) => void) => () => void
+  onAudioCaptureFailed: (callback: (payload: { channel: 'system' | 'mic'; message: string; attempt: number; maxAttempts: number; terminal?: boolean; stuck?: boolean; recovered?: boolean; titleKey?: string }) => void) => () => void
 
   // STT Status Events
   onSttStatusChanged: (callback: (data: { state: 'connected' | 'reconnecting' | 'failed' | 'awaiting-audio' | 'preparing'; provider: string; error?: string; channel: 'user' | 'interviewer'; reconnectAttempts?: number }) => void) => () => void

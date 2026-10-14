@@ -31,6 +31,8 @@ export function registerMockInterviewIpc(appState: AppState, safeHandle: (channe
     service.on('changed', state => {
         appState.mockInterviewTranscriptObserver = state.microphoneActive ? segment => service.transcript(segment) : null;
         appState.mockInterviewLevelObserver = state.microphoneActive ? level => service.microphoneLevel(level) : null;
+        appState.mockInterviewSpeechObserver = state.microphoneActive ? speaking => service.speechActivity(speaking) : null;
+        appState.mockInterviewSttStatusObserver = state.microphoneActive ? status => service.transcriptionStatus(status) : null;
         for (const window of BrowserWindow.getAllWindows()) {
             if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send('mock-interview:changed', state);
         }
@@ -38,6 +40,8 @@ export function registerMockInterviewIpc(appState: AppState, safeHandle: (channe
     app.once('before-quit', () => {
         appState.mockInterviewTranscriptObserver = null;
         appState.mockInterviewLevelObserver = null;
+        appState.mockInterviewSpeechObserver = null;
+        appState.mockInterviewSttStatusObserver = null;
         service.dispose();
     });
     const action = async (fn: () => unknown): Promise<InterviewResult> => {
