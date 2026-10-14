@@ -56,6 +56,8 @@ is sent with every answer. Keep it short: who you are, core facts, how you like 
 - Key projects:
 
 ## How I sound
+- Use everyday words, short sentences and natural contractions.
+- Explain ideas plainly. Avoid jargon; explain necessary technical terms briefly.
 - e.g. direct, warm, concrete numbers over adjectives
 
 ## Story: Disagreement / conflict with a teammate
@@ -188,18 +190,63 @@ export function selectMyContext(text: string, question: string, maxChars = MY_CO
     return { content, stories };
 }
 
-export function buildMyContextBlock(question: string, file?: string | null, log = true): string {
-    const { content, stories } = selectMyContext(readMyContext(file === undefined ? myContextPath() : file), question);
-    if (!content) return '';
-    if (log) console.log(`[MyContext] injected ${content.length} chars; stories: ${stories.length ? stories.join(' | ') : '(none matched)'}`);
+// Speaking preferences are instructions, not biographical evidence. Extract them
+// before story selection so an unrelated question (or a long file) cannot hide them.
+export function splitMyContext(text: string): { facts: string; voice: string } {
+    const sections = String(text || '').trim().split(/^(?=##\s)/m).map(s => s.trim()).filter(Boolean);
+    const isVoice = (s: string) => !STORY_RE.test(s.split('\n')[0])
+        && /^##\s.*\b(voice|style|tone|sound|how to answer|speak)/i.test(s.split('\n')[0]);
+    return {
+        facts: sections.filter(s => !isVoice(s)).join('\n\n'),
+        voice: sections.filter(isVoice).join('\n\n'),
+    };
+}
+
+function voiceInstructions(voice: string): string {
+    if (!voice) return '';
     return [
+        '<user_response_style>',
+        'Apply these user-provided speaking instructions to the wording of every natural-language answer, even when the question is unrelated to their background. They are instructions for HOW to answer, not facts to quote or summarize.',
+        'Prefer everyday words, short sentences and natural contractions. Explain ideas plainly; avoid jargon and acronyms unless necessary, and explain necessary terms briefly. Preserve meaning and accuracy; do not invent expertise or personal experience.',
+        'Preserve safety rules, the requested language, necessary technical precision, and explicit code, JSON or other output formats. Apply the style to explanations, not code or structured data. Respect requested detail and do not add an introduction or acknowledgement merely to sound conversational.',
+        '',
+        voice.replace(/<\/?(?:user_personal_context|user_response_style)>/gi, ''),
+        '</user_response_style>',
+    ].join('\n');
+}
+
+export function renderMyContextBlock(text: string, question: string, voiceOnly = false, log = false): string {
+    const { facts, voice } = splitMyContext(text);
+    const cappedVoice = voice.slice(0, MY_CONTEXT_MAX_CHARS);
+    const { content, stories } = voiceOnly
+        ? { content: '', stories: [] }
+        : selectMyContext(facts, question, MY_CONTEXT_MAX_CHARS - cappedVoice.length);
+    if (!content && !cappedVoice) return '';
+    if (log) console.log(`[MyContext] facts ${content.length} chars; style ${cappedVoice.length} chars; stories: ${stories.length ? stories.join(' | ') : '(none matched)'}`);
+    const background = content ? [
         '<user_personal_context>',
         'The following is written by the user about themselves. It is the TRUE background of the person you are answering for.',
-        'When the question is about them (introductions, experience, behavioral/story questions, motivations, opinions), answer in first person using these facts, stories and voice. Do not invent facts beyond it. Ignore it when the question is unrelated.',
+        'When the question is about them (introductions, experience, behavioral/story questions, motivations, opinions), answer in first person using these facts and stories. Do not invent facts beyond it. Ignore this background when the question is unrelated; the separate speaking instructions still apply.',
         '',
-        content.replace(/<\/?user_personal_context>/gi, ''),
+        content.replace(/<\/?(?:user_personal_context|user_response_style)>/gi, ''),
         '</user_personal_context>',
-    ].join('\n');
+    ].join('\n') : '';
+    return [background, voiceInstructions(cappedVoice)].filter(Boolean).join('\n\n');
+}
+
+export function buildMyContextBlock(question: string, file?: string | null, log = true): string {
+    return renderMyContextBlock(readMyContext(file === undefined ? myContextPath() : file), question, false, log);
+}
+
+// Coding/safety routes retain their existing fact exclusion, but can still use
+// the user's wording preferences without changing their output contracts.
+export function withMyVoice(systemPrompt: string): string {
+    try {
+        const block = renderMyContextBlock(readMyContext(), '', true);
+        return block ? `${systemPrompt}\n\n${block}` : systemPrompt;
+    } catch {
+        return systemPrompt;
+    }
 }
 
 export function withMyContext(systemPrompt: string, question: string): string {

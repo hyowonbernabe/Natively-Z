@@ -4760,10 +4760,11 @@ export function initializeIpcHandlers(appState: AppState): void {
             // even though the user-channel contract is attached below.
             codingTurnPromoted: isCodingChat,
           }), answerSurface, legacyDiagramTurn);
-        // Personal build: user's own my-context.md (not on coding/safety turns).
+        // Personal build: facts + speaking instructions, or speaking instructions
+        // alone on coding/safety turns (their output contracts remain authoritative).
         const systemPromptOverride: string | undefined = (_manualBasePrompt && !isCodingChat && answerPlan.answerType !== 'ethical_usage_answer')
           ? require('./llm/myContext').withMyContext(_manualBasePrompt, message)
-          : _manualBasePrompt;
+          : _manualBasePrompt ? require('./llm/myContext').withMyVoice(_manualBasePrompt) : _manualBasePrompt;
         // NOTE (audit 2026-06-28): the document-grounded greeting-suppression +
         // question-first restructuring now lives INSIDE LLMHelper._streamChatInner
         // (shapeDocumentGroundedSystemPrompt + buildDocumentGroundedUserContent),

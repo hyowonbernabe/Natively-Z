@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dist = (rel) => pathToFileURL(path.resolve(here, '../../../dist-electron/electron', rel)).href;
-const { readMyContext, selectMyContext, buildMyContextBlock } = await import(dist('llm/myContext.js'));
+const { readMyContext, selectMyContext, buildMyContextBlock, splitMyContext, renderMyContextBlock, MY_CONTEXT_MAX_CHARS } = await import(dist('llm/myContext.js'));
 
 const FILE = `# Me
 My name is Hyowon. I built Messenger Z.
@@ -96,4 +96,57 @@ Why AI: because.
   assert.match(selectMyContext(doc, 'Describe a time you failed', cap).content, /Body two/);
   assert.match(selectMyContext(doc, 'when did you mentor someone', cap).content, /Body three/);
   assert.equal(selectMyContext(doc, 'a time you led a team', cap).stories.length, 3);
+});
+
+test('speaking preferences become answer instructions, separate from factual grounding', () => {
+  const text = '# Me\nI built Messenger Z.\n\n## How to answer for me\nUse simple words.\n\n## Quick answers\nWhy AI: I enjoy building.';
+  const block = renderMyContextBlock(text, 'Explain how rain forms.');
+  const [background, style] = block.split('<user_response_style>');
+  assert.match(background, /I built Messenger Z/);
+  assert.doesNotMatch(background, /Use simple words/);
+  assert.match(style, /Use simple words/);
+  assert.match(style, /even when the question is unrelated/);
+  assert.match(style, /not facts to quote or summarize/);
+  assert.match(style, /Apply the style to explanations, not code or structured data/);
+});
+
+test('voice survives oversized background and late placement in the document', () => {
+  const text = `# Me\n${'Background fact. '.repeat(1500)}\n\n## How I sound\nKeep it conversational.`;
+  const block = renderMyContextBlock(text, 'What is caching?');
+  assert.match(block, /<user_response_style>[\s\S]*Keep it conversational\./);
+  const parts = splitMyContext(text);
+  const content = selectMyContext(parts.facts, '', MY_CONTEXT_MAX_CHARS - parts.voice.length).content;
+  assert.ok(content.length + parts.voice.length <= MY_CONTEXT_MAX_CHARS);
+});
+
+test('stories mentioning speaking remain evidence; multiple style headings and CRLF work', () => {
+  const text = '## Story: Speaking to a client\r\nI delivered a presentation.\r\n\r\n## Voice\r\nShort sentences.\r\n\r\n## Tone\r\nWarm.\r\n\r\n### Examples\r\nI made it faster.';
+  const { facts, voice } = splitMyContext(text);
+  assert.match(facts, /I delivered a presentation/);
+  assert.doesNotMatch(voice, /I delivered a presentation/);
+  assert.match(voice, /Short sentences/);
+  assert.match(voice, /I made it faster/);
+});
+
+test('voice-only coding path excludes biography and stories, retains precision and format', () => {
+  const text = `${FILE}\n## How I sound\nPlain words.`;
+  const block = renderMyContextBlock(text, '', true);
+  assert.match(block, /^<user_response_style>/);
+  assert.doesNotMatch(block, /Messenger Z|sharded Postgres|user_personal_context/);
+  assert.match(block, /necessary technical precision/);
+  assert.match(block, /explicit code, JSON or other output formats/);
+});
+
+test('no style section means no added speaking policy; empty and disabled context stay empty', () => {
+  assert.doesNotMatch(renderMyContextBlock(FILE, 'q'), /<user_response_style>/);
+  assert.equal(renderMyContextBlock(FILE, 'q', true), '');
+  assert.equal(renderMyContextBlock('', 'q'), '');
+  const old = process.env.NATIVELY_MY_CONTEXT;
+  process.env.NATIVELY_MY_CONTEXT = '0';
+  try {
+    assert.equal(buildMyContextBlock('q', path.resolve(here, '../../../../docs/hyowon.md'), false), '');
+  } finally {
+    if (old === undefined) delete process.env.NATIVELY_MY_CONTEXT;
+    else process.env.NATIVELY_MY_CONTEXT = old;
+  }
 });

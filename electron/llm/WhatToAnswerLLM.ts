@@ -1157,9 +1157,12 @@ The user triggered this action with a coding problem on screen and NO new questi
             // contract; every other composition already carries exactly one, and
             // the helper never adds a second.
             _wtaSystemPrompt = withDiagramContract(_wtaSystemPrompt, diagramTurn, { tier: v2Tier, surface: 'live' });
-            // Personal build: user's own my-context.md on every non-coding answer.
+            // Personal build: facts + speaking instructions on non-coding answers;
+            // speaking instructions alone on coding answers.
             if (!(answerPlan && isCodingAnswerType(answerPlan.answerType))) {
                 _wtaSystemPrompt = require('./myContext').withMyContext(_wtaSystemPrompt, answerPlan?.question || String(cleanedTranscript || '').slice(-600));
+            } else {
+                _wtaSystemPrompt = require('./myContext').withMyVoice(_wtaSystemPrompt);
             }
             if (_v3p) console.log('[WhatToAnswerLLM] V3 prompt in effect (Phase 6 wiring)');
             // INSTRUMENTATION FIX (session C forensics, 2026-08-21): the

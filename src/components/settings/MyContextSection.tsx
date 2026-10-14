@@ -32,7 +32,7 @@ export const MyContextSection: React.FC = () => {
     <section>
       <SettingsSectionHeading
         title="My Context"
-        subtitle="Give live answers and chat your background, experiences and voice."
+        subtitle="Use your facts when relevant. Apply your speaking style to answer wording."
       />
       <SettingsRow
         icon={<UserRound size={20} />}
@@ -45,6 +45,7 @@ export const MyContextSection: React.FC = () => {
         title="Context file"
         description={<span className="break-all">{s?.path ?? 'Loading file location…'}</span>}
       >
+          <p className="pb-3 text-xs text-muted-foreground">Add a “How I sound” section for vocabulary, tone and example answers. These become speaking instructions, separate from your background facts.</p>
           <div className="flex flex-wrap gap-2 pb-3">
             <button type="button" className={SETTINGS_BTN} onClick={() => { void window.electronAPI.openMyContext?.().then(refresh); }}>
               <FileText size={14} /> Edit file
