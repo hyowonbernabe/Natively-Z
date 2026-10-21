@@ -68,6 +68,8 @@ export class ClarifyLLM {
      * Generate a clarification question (Streamed)
      */
     async *generateStream(context: string, options?: QuickActionContextOptions): AsyncGenerator<string> {
+        // Personal build (Natively Z): transparent prompt (Settings → Intelligence → Prompt).
+        if (require('./transparentPrompt').isTransparentPromptOn()) { yield* require('./transparentPrompt').streamTransparent(this.llmHelper, { action: 'clarify' }); return; }
         if (!context.trim()) return;
         try {
             const promptOverride = this.resolvePrompt();

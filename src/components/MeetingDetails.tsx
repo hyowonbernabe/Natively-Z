@@ -2288,7 +2288,9 @@ const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting: initialMeeting
     const resolveSpeakerName = (rawSpeaker: string): string => {
         const labels = meeting.detailedSummary?.speakerLabels || {};
         const lower = (rawSpeaker || '').toLowerCase();
-        const id = /^(user|me)$/.test(lower) ? 'me' : (/^(interviewer|them|other|system|assistant)$/.test(lower) ? 'speaker_1' : lower.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'unknown');
+        // Personal build: AI answers are labelled as the AI, never as the other speaker.
+        if (lower === 'assistant') return 'AI suggested';
+        const id = /^(user|me)$/.test(lower) ? 'me' : (/^(interviewer|them|other|system)$/.test(lower) ? 'speaker_1' : lower.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'unknown');
         if (labels[id]) return labels[id];
         if (id === 'me') return calendarUserName || 'Me';
         if (id === 'speaker_1') return 'Speaker 1';

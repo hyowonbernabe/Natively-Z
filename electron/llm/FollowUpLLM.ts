@@ -54,6 +54,8 @@ export class FollowUpLLM {
     }
 
     async *generateStream(previousAnswer: string, refinementRequest: string, context?: string, options?: { contractRule?: string } & { diagramRule?: string }): AsyncGenerator<string> {
+        // Personal build (Natively Z): transparent prompt (Settings → Intelligence → Prompt).
+        if (require('./transparentPrompt').isTransparentPromptOn()) { yield* require('./transparentPrompt').streamTransparent(this.llmHelper, { action: 'follow_up', request: refinementRequest }); return; }
         try {
             let prompt = this.resolvePrompt();
             // Envelope decision uses the UNMODIFIED resolved prompt — appending

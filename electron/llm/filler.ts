@@ -8,8 +8,13 @@
 import { getOutputStyleText } from './myContext';
 
 export const FILLER_HARD_STOP_MS = 6000;
+/** Personal build: how long a transparent answer waits for the filler line it continues from. */
+export const FILLER_WAIT_MS = 3000;
+/** Resolves with the filler line, or '' once `ms` passed (the answer then starts without it). */
+export function waitForFiller(filler: Promise<string>, ms = FILLER_WAIT_MS): Promise<string> {
+    return Promise.race([filler.catch(() => ''), new Promise<string>((r) => setTimeout(() => r(''), ms))]);
+}
 const FILLER_MAX_CHARS = 240;
-const RECENT_KEEP = 5;
 
 export type FillerSetting = 'auto' | 'off' | string;
 const mainAnswersStarted = new WeakSet<AbortSignal>();
@@ -90,6 +95,7 @@ export function withParallelMainOpening(prompt: string, enabled: boolean): strin
         ? `${prompt}\n\n${PARALLEL_MAIN_OPENING_RULE}` : prompt;
 }
 
+// Stock filler prompt, used when the transparent prompt is switched off (NATIVELY_TRANSPARENT_PROMPT=0).
 const recent: string[] = [];
 
 /** The user's voice/style sections from my-context.md (headings mentioning voice, style, tone, attitude…). */
@@ -117,6 +123,26 @@ export function buildFillerPrompt(question: string, opts: { voice?: string; rece
     ].filter(Boolean).join('\n');
     return { system, user: `Question: ${question.trim()}
 Write only the question-specific opening (${words} words, no invented facts).` };
+}
+
+/**
+ * Personal build: the filler's prompt is the transparent builder's (Settings → Intelligence → Prompt):
+ * Base instructions + Output Style + the meeting transcript + its own visible instruction.
+ * `session` null = no meeting (the speed test's sample question only).
+ */
+export function buildTransparentFillerPrompt(question: string, session?: null): { system: string; user: string } {
+    const { buildTransparentPrompt } = require('./transparentPrompt') as typeof import('./transparentPrompt');
+    const build = (request?: string) => buildTransparentPrompt({
+        action: 'filler',
+        request,
+        // My Context is in: the filler is the answer's true first sentence, which the answer continues.
+        parts: { answerLength: false },
+        ...(session === null ? { session: null } : {}),
+    });
+    // The transcript already holds a spoken question (whole, even when it arrived in pieces);
+    // name it separately only when it isn't there yet (typed chat, the speed test).
+    const fromTranscript = build();
+    return fromTranscript.user.includes(`: ${question.trim()}`) ? fromTranscript : build(question);
 }
 
 /** Reject observed filler failures before showing them; never revise visible text. */
@@ -182,11 +208,30 @@ export function cleanFillerChunk(s: string): string {
  * Fire-and-forget. Buffers a complete sentence, then publishes it once.
  * Never throws. Stops on signal abort, after FILLER_HARD_STOP_MS, or at FILLER_MAX_CHARS.
  */
+/**
+ * Every filler line that was actually shown, appended to <userData>/filler-log.jsonl, so a session's
+ * openings can be reviewed next to the meeting transcript (tools/sessions.py in the workspace).
+ * Local only, never sent anywhere; best-effort: a write failure never affects the answer.
+ */
+function logShownFiller(entry: { question: string; modelId: string; ms: number; text: string }): void {
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { app } = require('electron');
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const fs = require('fs');
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const path = require('path');
+        if (!app?.getPath) return;
+        fs.appendFileSync(path.join(app.getPath('userData'), 'filler-log.jsonl'), JSON.stringify({ at: Date.now(), ...entry }) + '\n');
+    } catch { /* logging only */ }
+}
+
 export async function runFiller(input: {
     helper: FillerHelper;
     question: string;
     signal: AbortSignal;
-    onToken: (chunk: string) => void;
+    /** Paints the line; returns false if it was not shown (superseded). */
+    onToken: (chunk: string) => void | boolean;
 }): Promise<string> {
     const question = String(input.question || '').trim();
     if (!question || input.signal.aborted || mainAnswersStarted.has(input.signal)) return '';
@@ -194,17 +239,20 @@ export async function runFiller(input: {
     try {
         modelId = resolveFillerModel(input.helper);
         if (!modelId) return '';
-        const { system, user } = buildFillerPrompt(question, {
-            voice: getOutputStyleText().slice(0, 900),
-            recentLines: recent,
-        });
+        const transparent = require('./transparentPrompt').isTransparentPromptOn();
+        const { system, user } = transparent
+            ? buildTransparentFillerPrompt(question)
+            : buildFillerPrompt(question, { voice: getOutputStyleText().slice(0, 900), recentLines: recent });
         const signal = AbortSignal.any([input.signal, AbortSignal.timeout(FILLER_HARD_STOP_MS)]);
         const maxChars = 160;
         const t0 = Date.now();
         let text = '';
         let buffer = '';
         for await (const raw of input.helper.streamFillerLine(modelId, system, user, signal)) {
-            if (signal.aborted || mainAnswersStarted.has(input.signal)) return '';
+            if (signal.aborted || mainAnswersStarted.has(input.signal)) {
+                if (mainAnswersStarted.has(input.signal)) console.log(`[Filler] dropped: the answer started first (${modelId}, ${Date.now() - t0}ms)`);
+                return '';
+            }
             const chunk = cleanFillerChunk(String(raw ?? ''));
             if (!chunk) continue;
             if (!buffer) noteFirstToken(modelId, Date.now() - t0);
@@ -214,16 +262,22 @@ export async function runFiller(input: {
             if (text) break;
             if (buffer.length > maxChars || /[\r\n]/.test(buffer)) break;
         }
-        if (signal.aborted || mainAnswersStarted.has(input.signal)) return '';
+        if (signal.aborted || mainAnswersStarted.has(input.signal)) {
+            if (mainAnswersStarted.has(input.signal)) console.log(`[Filler] dropped: the answer started first (${modelId}, ${Date.now() - t0}ms)`);
+            return '';
+        }
         if (!text || !openingFitsQuestion(text, question)) {
             noteFirstToken(modelId, FILLER_HARD_STOP_MS * 10);
             return '';
         }
-        input.onToken(text);
+        const shown = input.onToken(text) !== false;
+        if (!shown) return '';
+        try { require('./transparentPrompt').noteFillerShown(text); } catch { /* transcript only */ }
         if (text) {
             recent.push(text);
-            if (recent.length > RECENT_KEEP) recent.shift();
+            if (recent.length > 5) recent.shift();
             console.log(`[Filler] ${modelId} ${Date.now() - t0}ms: ${text}`);
+            logShownFiller({ question, modelId, ms: Date.now() - t0, text });
         }
         return text;
     } catch (e: any) {
@@ -240,7 +294,9 @@ export interface FillerSpeedResult { modelId: string; ok: boolean; firstTokenMs?
 /** One real filler call on modelId with a sample question. Measured result also teaches Auto. */
 export async function testFillerSpeed(helper: FillerHelper, modelId: string, question = 'Tell me about a time you disagreed with a teammate.'): Promise<FillerSpeedResult> {
     if (!helper.canDispatchFillerModel(modelId)) return { modelId, ok: false, error: 'not supported for filler' };
-    const { system, user } = buildFillerPrompt(question, { voice: getOutputStyleText().slice(0, 900) });
+    const { system, user } = require('./transparentPrompt').isTransparentPromptOn()
+        ? buildTransparentFillerPrompt(question, null)
+        : buildFillerPrompt(question, { voice: getOutputStyleText().slice(0, 900) });
     const signal = AbortSignal.timeout(20000);
     const t0 = Date.now();
     let first: number | undefined;

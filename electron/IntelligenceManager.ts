@@ -39,6 +39,9 @@ export class IntelligenceManager extends EventEmitter {
     constructor(llmHelper: LLMHelper) {
         super();
         this.session = new SessionTracker();
+        // Personal build: the meeting and the response language every transparent prompt reads.
+        require('./llm/transparentPrompt').setPromptSession(this.session);
+        require('./llm/transparentPrompt').setPromptLanguageSource(() => llmHelper.getAiResponseLanguage());
         this.engine = new IntelligenceEngine(llmHelper, this.session);
         this.persistence = new MeetingPersistence(this.session, llmHelper);
 

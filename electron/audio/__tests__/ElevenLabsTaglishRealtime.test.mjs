@@ -14,11 +14,13 @@ class Socket extends EventEmitter {
     terminate() { this.close(); }
     message(data) { this.emit('message', Buffer.from(JSON.stringify(data))); }
 }
-function setup(language = 'english-filipino') {
+// Personal build (Natively Z): the stock behaviour tests run with the new Scribe options off.
+const STOCK = { clean: false, keyterms: [], turnPrediction: false };
+function setup(language = 'english-filipino', options = STOCK) {
     const sockets = [], urls = [], errors = [], reconnects = [], transcripts = [];
     const stt = new ElevenLabsStreamingSTT('test-key', (url) => {
         urls.push(new URL(url)); const socket = new Socket(); sockets.push(socket); return socket;
-    });
+    }, () => options);
     stt.on('error', error => errors.push(error));
     stt.on('reconnecting', info => reconnects.push(info));
     stt.on('transcript', result => transcripts.push(result));
@@ -138,7 +140,7 @@ test('48 kHz conversion attenuates an aliased tone rather than selecting every t
 
 test('meeting mode does not open a billable socket for an empty audio channel', () => {
     const sockets = [];
-    const stt = new ElevenLabsStreamingSTT('test-key', () => { const ws = new Socket(); sockets.push(ws); return ws; });
+    const stt = new ElevenLabsStreamingSTT('test-key', () => { const ws = new Socket(); sockets.push(ws); return ws; }, () => STOCK);
     stt.setConnectOnAudioOnly(true); stt.start();
     try {
         assert.equal(sockets.length, 0);
@@ -176,4 +178,49 @@ test('insufficient audio is idle, whereas a rate limit is actionable and never s
             else { assert.equal(stt.isActive, false); assert.equal(errors.length, 1); }
         } finally { stt.stop(); }
     }
+});
+
+// ── Personal build (Natively Z): Scribe options ──
+test('clean transcript, word list and turn prediction go on the connection', () => {
+    const { stt, urls } = setup('english-filipino', { clean: true, keyterms: ['ZuraLog', 'MultiplyOS'], turnPrediction: true });
+    try {
+        assert.equal(urls[0].searchParams.get('no_verbatim'), 'true');
+        assert.deepEqual(urls[0].searchParams.getAll('keyterms'), ['ZuraLog', 'MultiplyOS']);
+        assert.equal(urls[0].searchParams.get('commit_strategy'), 'turn_prediction');
+    } finally { stt.stop(); }
+});
+test('a refused turn_prediction falls back to vad right away, without an error', () => {
+    const { stt, sockets, urls, errors } = setup('english-filipino', { clean: false, keyterms: [], turnPrediction: true });
+    try {
+        sockets[0].message({ message_type: 'invalid_request', error: 'commit_strategy not supported' });
+        assert.equal(errors.length, 0);
+        assert.equal(urls.length, 2);
+        assert.equal(urls[1].searchParams.get('commit_strategy'), 'vad');
+        // A real config error on the vad session is still terminal.
+        sockets[1].message({ message_type: 'invalid_request', error: 'bad' });
+        assert.equal(errors.length, 1);
+    } finally { stt.stop(); }
+});
+test('after a reconnect the first chunk carries the last words heard', () => {
+    const { stt, sockets } = setup();
+    try {
+        stt.setSampleRate(16000);
+        sockets[0].emit('open'); sockets[0].message({ message_type: 'session_started' });
+        sockets[0].message({ message_type: 'committed_transcript', text: 'Tell me about yourself and what drives you every day' });
+        stt.write(Buffer.alloc(3200));
+        sockets[0].emit('close', 1006, '');
+        clearTimeout(stt.reconnectTimer); stt.reconnectTimer = null; stt.connect();
+        sockets[1].message({ message_type: 'session_started' });
+        stt.write(Buffer.alloc(3200));
+        const first = sockets[1].sent[0];
+        assert.ok(first.previous_text && first.previous_text.length <= 50);
+        assert.ok('Tell me about yourself and what drives you every day'.endsWith(first.previous_text));
+        assert.equal(sockets[1].sent[1]?.previous_text, undefined);
+    } finally { stt.stop(); }
+});
+test('the word list is built from My Context names', () => {
+    const { autoKeyterms } = require('../../../dist-electron/electron/audio/scribeOptions.js');
+    const terms = autoKeyterms('## Story: Teamwork / champion: Hack4Gov CTF\nI built ZuraLog and work at MultiplyOS.\n## Story: Desktop: Rift Helper');
+    for (const t of ['ZuraLog', 'MultiplyOS', 'Hack4Gov CTF', 'Rift Helper']) assert.ok(terms.includes(t), `${t} in ${terms}`);
+    assert.ok(terms.every(t => t.length <= 20));
 });

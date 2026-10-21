@@ -1415,6 +1415,8 @@ export class AppState {
   public mockInterviewSpeechObserver: ((speaking: boolean) => void) | null = null;
   public mockInterviewSttStatusObserver: ((state: string) => void) | null = null;
   public mockInterviewLevelObserver: ((level: number) => void) | null = null;
+  /** Personal build: true for meeting-audio text that is the mock's own read-aloud question. */
+  public mockInterviewEchoFilter: ((text: string) => boolean) | null = null;
   private static instance: AppState | null = null
 
   private windowHelper: WindowHelper
@@ -3758,6 +3760,12 @@ export class AppState {
       // window between Stop click and STT socket close so the user's last
       // sentence isn't silently dropped.
       if (!this.isMeetingActive && !this._isDraining) {
+        return;
+      }
+      // Personal build: the mock interview's question, heard back through meeting audio.
+      // Kept out of the transcript and answers, but still shown on the live transcript bar.
+      if (speaker === 'interviewer' && this.mockInterviewEchoFilter?.(segment.text)) {
+        this.sendThrottledTranscript({ speaker, text: segment.text, timestamp: Date.now(), final: segment.isFinal, confidence: segment.confidence });
         return;
       }
 

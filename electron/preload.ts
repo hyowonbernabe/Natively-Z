@@ -628,9 +628,18 @@ interface ElectronAPI {
   getStoryPriorities: () => Promise<{ stories: string[]; priorities: import('./llm/myContext').StoryPriorities }>;
   setStoryPriorities: (priorities: import('./llm/myContext').StoryPriorities) => Promise<{ stories: string[]; priorities: import('./llm/myContext').StoryPriorities }>;
   getAnswerLength: () => Promise<import('./llm/answerLength').AnswerLength>;
+  getFillerWords: () => Promise<import('./llm/fillerWords').FillerWords>;
+  getScribeOptions: () => Promise<{ settings: import('./audio/scribeOptions').ScribeSettings; terms: string[] }>;
+  setScribeOptions: (settings: import('./audio/scribeOptions').ScribeSettings) => Promise<{ settings: import('./audio/scribeOptions').ScribeSettings; terms: string[] }>;
+  setFillerWords: (value: import('./llm/fillerWords').FillerWords) => Promise<import('./llm/fillerWords').FillerWords>;
+  onFillerWordsChanged: (callback: (value: import('./llm/fillerWords').FillerWords) => void) => () => void;
   setAnswerLength: (length: import('./llm/answerLength').AnswerLength) => Promise<import('./llm/answerLength').AnswerLength>;
   onAnswerLengthChanged: (callback: (length: import('./llm/answerLength').AnswerLength) => void) => () => void;
   getOutputStyle: () => Promise<import('./llm/myContext').OutputStyleConfig>;
+  getPromptSettings: () => Promise<import('./llm/transparentPrompt').PromptSettingsPayload>;
+  setPromptSettings: (settings: import('./llm/transparentPrompt').PromptSettings) => Promise<import('./llm/transparentPrompt').PromptSettingsPayload>;
+  resetPromptSettings: () => Promise<import('./llm/transparentPrompt').PromptSettingsPayload>;
+  getLastPrompts: () => Promise<import('./llm/transparentPrompt').LastPrompt[]>;
   setOutputStyle: (config: import('./llm/myContext').OutputStyleConfig) => Promise<import('./llm/myContext').OutputStyleConfig>;
   getMockInterview: () => Promise<InterviewState>;
   getMockInterviewHistory: () => Promise<InterviewSession[]>;
@@ -2302,6 +2311,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getStoryPriorities: () => ipcRenderer.invoke('my-context:priorities:get'),
   setStoryPriorities: (priorities) => ipcRenderer.invoke('my-context:priorities:set', priorities),
   getAnswerLength: () => ipcRenderer.invoke('answer-length:get'),
+  getFillerWords: () => ipcRenderer.invoke('filler-words:get'),
+  getScribeOptions: () => ipcRenderer.invoke('scribe-options:get'),
+  setScribeOptions: (settings) => ipcRenderer.invoke('scribe-options:set', settings),
+  setFillerWords: (value) => ipcRenderer.invoke('filler-words:set', value),
+  onFillerWordsChanged: (callback) => {
+    const subscription = (_event: Electron.IpcRendererEvent, value: import('./llm/fillerWords').FillerWords) => callback(value);
+    ipcRenderer.on('filler-words:changed', subscription);
+    return () => ipcRenderer.removeListener('filler-words:changed', subscription);
+  },
   setAnswerLength: (length) => ipcRenderer.invoke('answer-length:set', length),
   onAnswerLengthChanged: (callback) => {
     const subscription = (_event: Electron.IpcRendererEvent, length: import('./llm/answerLength').AnswerLength) => callback(length);
@@ -2309,6 +2327,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('answer-length:changed', subscription);
   },
   getOutputStyle: () => ipcRenderer.invoke('output-style:get'),
+  getPromptSettings: () => ipcRenderer.invoke('prompt-settings:get'),
+  setPromptSettings: (settings) => ipcRenderer.invoke('prompt-settings:set', settings),
+  resetPromptSettings: () => ipcRenderer.invoke('prompt-settings:reset'),
+  getLastPrompts: () => ipcRenderer.invoke('prompt-settings:last'),
   setOutputStyle: (config) => ipcRenderer.invoke('output-style:set', config),
   getMockInterview: () => ipcRenderer.invoke('mock-interview:get'),
   getMockInterviewHistory: () => ipcRenderer.invoke('mock-interview:history'),

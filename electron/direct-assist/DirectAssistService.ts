@@ -212,14 +212,22 @@ export class DirectAssistService {
       // ONE prompt for the whole ladder: prepareDirectAssistPrompt and the
       // single `start` event stay outside it, so every rung answers the exact
       // same question.
+      // Personal build (Natively Z): the transparent prompt (Settings → Intelligence → Prompt) replaces
+      // Direct Assist's own; screenshots still go as images.
+      const tp = require('../llm/transparentPrompt') as typeof import('../llm/transparentPrompt');
+      const transparent = tp.isTransparentPromptOn()
+        ? tp.buildTransparentPrompt({ action: prepared.request.source === 'typed' ? 'chat' : 'answer', request: prepared.request.currentRequest })
+        : null;
       const dispatchRequest: DirectAssistDispatchRequest = Object.freeze({
         requestId: prepared.request.requestId,
         selection: prepared.request.selection,
-        systemPrompt: prepared.systemPrompt,
-        userPrompt: prepared.userPrompt,
+        systemPrompt: transparent ? transparent.system : prepared.systemPrompt,
+        userPrompt: transparent ? transparent.user : prepared.userPrompt,
         imagePaths: prepared.imagePaths,
         historyImagePaths: prepared.historyImagePaths,
       });
+      // A provider error that repeats the prompt actually sent must not leak it either.
+      if (transparent) echoOf = [transparent.system, transparent.user];
 
       // OPTIONAL on the transport interface: a transport without it supports no
       // ladder, and must still work as the single-dispatch service it was.

@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { MockInterviewService } = require('../../../dist-electron/electron/services/mock-interview/MockInterviewService.js');
 const { speechCommand } = require('../../../dist-electron/electron/services/mock-interview/InterviewSpeech.js');
-const { interviewMarkdown, interviewOptions, questionPrompt } = require('../../../dist-electron/electron/services/mock-interview/interviewPolicy.js');
+const { interviewMarkdown, interviewOptions, questionPrompt, isQuestionEcho } = require('../../../dist-electron/electron/services/mock-interview/interviewPolicy.js');
 
 function fixture(t, overrides = {}) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'natively-mock-test-'));
@@ -315,4 +315,42 @@ test('personal practice retains spoken automatic progression and saved focus', a
   assert.match(f.calls.generated[0].system, /personal\/general interview practice/);
   assert.equal(f.service.snapshot().session.options.autoAdvance, true);
   assert.equal(f.service.snapshot().session.options.focus, 'personal');
+});
+test('resume focus needs no role and asks recruiter-style background questions', () => {
+  const options = interviewOptions({ focus: 'resume', role: '' });
+  assert.equal(options.focus, 'resume');
+  assert.equal(options.role, 'Resume screening');
+  const prompt = questionPrompt({ options, turns: [] });
+  assert.match(prompt.system + prompt.user, /how many years I have with each main tool/);
+  assert.match(prompt.system + prompt.user, /no coding quizzes/);
+});
+test('read-aloud question heard back through meeting audio counts as an echo, real speech does not', () => {
+  const q = 'You’re balancing a role at MultiplyOS with two businesses. How do you decide what gets your attention?';
+  assert.equal(isQuestionEcho("You're balancing a role at MultiplyOS with two businesses.", q), true);
+  assert.equal(isQuestionEcho('How do you decide', q), true);
+  assert.equal(isQuestionEcho('Tell me about your-', 'Tell me about yourself and what led you to software.'), true);
+  assert.equal(isQuestionEcho('Can you tell me about your salary expectations instead?', q), false);
+  assert.equal(isQuestionEcho('anything', undefined), false);
+});
+test('stopping or closing while feedback is being written still saves the feedback', async t => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let calls = 0;
+  const f = fixture(t, {
+    generate: async function* () { calls++; if (calls > 1) { await gate; yield 'Clear answer. Add one example.'; } else yield 'What do you do day to day?'; },
+  });
+  await f.service.start({ role: 'Engineer', spoken: false, microphone: false, questions: 1 });
+  f.service.updateDraft('I build features.');
+  const finishing = f.service.finish();
+  await new Promise(resolve => setImmediate(resolve));
+  await f.service.stop();
+  release();
+  await finishing;
+  assert.equal(f.service.history()[0].feedback, 'Clear answer. Add one example.');
+});
+test('echoed mock question still reaches the live transcript bar', () => {
+  const main = fs.readFileSync(new URL('../../main.ts', import.meta.url), 'utf8');
+  const branch = main.match(/mockInterviewEchoFilter\?\.\(segment\.text\)\) \{([\s\S]*?)return;/);
+  assert.ok(branch, 'echo branch present');
+  assert.match(branch[1], /sendThrottledTranscript\(/);
 });

@@ -29,6 +29,8 @@ export class CodeHintLLM {
         transcriptContext?: string,
         v3?: { system: string; user: string }
     ): AsyncGenerator<string> {
+        // Personal build (Natively Z): transparent prompt (Settings → Intelligence → Prompt); screenshots go as images.
+        if (require('./transparentPrompt').isTransparentPromptOn()) { yield* require('./transparentPrompt').streamTransparent(this.llmHelper, { action: 'code_hint', request: questionContext }, imagePaths); return; }
         try {
             // No capability gate here (2026-10-01). streamChat sends every
             // image-bearing turn through the vision chain, the same path Ask AI

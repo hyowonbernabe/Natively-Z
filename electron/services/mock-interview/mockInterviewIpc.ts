@@ -5,8 +5,8 @@ import type { AppState } from '../../main';
 import { getOutputStyleText } from '../../llm/myContext';
 import { MockInterviewService } from './MockInterviewService';
 import { InterviewSpeech } from './InterviewSpeech';
-import { interviewMarkdown } from './interviewPolicy';
-import type { InterviewOptions, InterviewResult } from './types';
+import { interviewMarkdown, isQuestionEcho } from './interviewPolicy';
+import type { InterviewOptions, InterviewResult, InterviewState } from './types';
 
 export function registerMockInterviewIpc(appState: AppState, safeHandle: (channel: string, fn: (...args: any[]) => any) => void): void {
     const speech = new InterviewSpeech();
@@ -26,6 +26,11 @@ export function registerMockInterviewIpc(appState: AppState, safeHandle: (channe
         finalizeMicrophone: () => { appState.finalizeMicSTT(); },
         speak: (text, signal) => speech.speak(text, signal),
         cancelSpeech: () => speech.cancel(),
+        // Personal build: the meeting (and so every answer prompt and the filler) hears the question as the interviewer's.
+        noteQuestion: text => {
+            if (!appState.getIsMeetingActive()) return;
+            appState.getIntelligenceManager().addTranscript({ speaker: 'interviewer', text, timestamp: Date.now(), final: true, origin: 'stt' }, true);
+        },
         voice: () => getOutputStyleText(),
     });
     service.on('changed', state => {
@@ -33,6 +38,9 @@ export function registerMockInterviewIpc(appState: AppState, safeHandle: (channe
         appState.mockInterviewLevelObserver = state.microphoneActive ? level => service.microphoneLevel(level) : null;
         appState.mockInterviewSpeechObserver = state.microphoneActive ? speaking => service.speechActivity(speaking) : null;
         appState.mockInterviewSttStatusObserver = state.microphoneActive ? status => service.transcriptionStatus(status) : null;
+        // Personal build: drop the read-aloud question when meeting audio hears it again (it is already noted once).
+        const question = (state as InterviewState).session?.turns.filter(t => t.speaker === 'interviewer').at(-1)?.text;
+        appState.mockInterviewEchoFilter = state.microphoneActive && state.session?.options.spoken ? text => isQuestionEcho(text, question) : null;
         for (const window of BrowserWindow.getAllWindows()) {
             if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send('mock-interview:changed', state);
         }
@@ -42,6 +50,7 @@ export function registerMockInterviewIpc(appState: AppState, safeHandle: (channe
         appState.mockInterviewLevelObserver = null;
         appState.mockInterviewSpeechObserver = null;
         appState.mockInterviewSttStatusObserver = null;
+        appState.mockInterviewEchoFilter = null;
         service.dispose();
     });
     const action = async (fn: () => unknown): Promise<InterviewResult> => {

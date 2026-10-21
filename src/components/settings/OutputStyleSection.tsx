@@ -1,4 +1,4 @@
-import { AnswerLengthControl } from './AnswerLengthControl';
+import { AnswerLengthControl, FillerWordsControl } from './AnswerLengthControl';
 import React, { useEffect, useState } from 'react';
 import { MessageSquare, Save } from 'lucide-react';
 import type { OutputStyleConfig } from '../../../electron/llm/myContext';
@@ -38,6 +38,7 @@ export function OutputStyleSection() {
     return (
         <>
         <AnswerLengthControl />
+        <FillerWordsControl />
         <section className="mt-6 border-t border-border-subtle pt-6">
             <SettingsSectionHeading title="Output Style" subtitle="Set how your answers sound, separately from your personal information." />
             <SettingsRow icon={<MessageSquare size={20} />} title="Use Output Style"

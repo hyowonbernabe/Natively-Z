@@ -170,7 +170,9 @@ describe('Soniox: voice-AI endpoint tuning', () => {
 describe('ElevenLabs: finals every ~0.8 s of silence, not every ~36 s of audio', () => {
   test('THE BUG: the session asks for VAD commits', () => {
     const el = src('electron/audio/ElevenLabsStreamingSTT.ts');
-    assert.match(el, /&commit_strategy=vad&vad_silence_threshold_secs=\$\{ELEVENLABS_VAD_SILENCE_SECS\}/);
+    // Personal build: the strategy is a variable now (turn_prediction is opt-in); vad stays the default.
+    assert.match(el, /&commit_strategy=\$\{strategy\}&vad_silence_threshold_secs=\$\{ELEVENLABS_VAD_SILENCE_SECS\}/);
+    assert.match(el, /\? 'turn_prediction' : 'vad'/);
     assert.equal(ELEVENLABS_VAD_SILENCE_SECS, 0.8);
     assert.ok(ELEVENLABS_VAD_SILENCE_SECS >= 0.3 && ELEVENLABS_VAD_SILENCE_SECS <= 3.0, 'inside the documented range');
   });

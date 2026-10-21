@@ -1806,16 +1806,23 @@ export function initializeIpcHandlers(appState: AppState): void {
         _chatStreamsBySender.set(senderId, { streamId: myStreamId, controller: myController });
         // Personal build (Natively Z): filler / bridge line for chat and the Answer button, in parallel
         // with the reply. Negative id keeps it apart from engine generations. skipSystemPrompt = raw internal calls.
+        // With the transparent prompt the reply waits briefly for this line and continues from it (the Answer
+        // button included); a filler later than that wait is cancelled through chatFillerCtl.
+        let chatFiller: Promise<string> | null = null;
+        const chatFillerCtl = new AbortController();
         try {
           const fillerQ = String(message || '').trim() || ((imagePaths?.length) ? 'Can you take a look at this?' : '');
-          if (fillerQ && !options?.skipSystemPrompt) {
-            void require('./llm/filler').runFiller({
+          const transparentAnswerButton = options?.liveQuestion === true && require('./llm/transparentPrompt').isTransparentPromptOn();
+          if (fillerQ && (!options?.skipSystemPrompt || transparentAnswerButton)) {
+            chatFiller = require('./llm/filler').runFiller({
               helper: llmHelper,
               question: fillerQ,
-              signal: myController.signal,
+              // Transparent: cancellable by the reply's wait. Off: the stock signal, so 'answer started first' still drops it.
+              signal: transparentAnswerButton || require('./llm/transparentPrompt').isTransparentPromptOn() ? AbortSignal.any([myController.signal, chatFillerCtl.signal]) : myController.signal,
               onToken: (chunk: string) => {
-                if (_chatStreamsBySender.get(senderId)?.streamId !== myStreamId || event.sender.isDestroyed()) return;
+                if (_chatStreamsBySender.get(senderId)?.streamId !== myStreamId || event.sender.isDestroyed()) return false;
                 event.sender.send('intelligence-filler-token', { chunk, generationId: -myStreamId });
+                return true;
               },
             });
           }
@@ -1913,6 +1920,90 @@ export function initializeIpcHandlers(appState: AppState): void {
             event.sender.send('gemini-stream-error', `Skill lookup failed: ${skillErr?.message || 'unknown error'}`, { streamId: myStreamId });
             return null;  // sibling error paths return null; handler is typed `| null`
           }
+        }
+
+        // Personal build (Natively Z): the transparent prompt for typed chat and the Answer button
+        // (electron/llm/transparentPrompt.ts). Exactly what Settings → Intelligence → Prompt shows is
+        // sent; the V3/legacy assembly below is bypassed. A caller-composed prompt (past-meeting
+        // recall) keeps its own path, except the Answer button's.
+        if (require('./llm/transparentPrompt').isTransparentPromptOn()
+          && !(options?.skipSystemPrompt === true && Boolean(context) && !options?.liveQuestion)) {
+          const tp = require('./llm/transparentPrompt') as typeof import('./llm/transparentPrompt');
+          const { raceStreamWithDeadline } = require('./llm/liveDeadlines') as typeof import('./llm/liveDeadlines');
+          const intelligenceManager = appState.getIntelligenceManager();
+          const asked = skillStrippedMessage ?? String(message || '');
+          const isAnswer = options?.liveQuestion === true;
+          const recordAsked = () => {
+            if (!questionOnRecordAsSpeech && asked.trim()) {
+              intelligenceManager.addTranscript({ text: asked, speaker: 'user', timestamp: Date.now(), final: true, origin: 'manual_chat' }, true);
+            }
+          };
+          // Answer button: the spoken question goes under THE QUESTION (it may sit under EARLIER, or be
+          // left out with the mic). Typed chat: the message is MY TYPED MESSAGE, recorded after the build.
+          questionOnRecordAsSpeech = isAnswer
+            && spokenLineAlreadyInTranscript(intelligenceManager.getCurrentMeetingTranscript(), asked, Date.now());
+          if (isAnswer) recordAsked();
+          const alreadySaid = chatFiller ? await require('./llm/filler').waitForFiller(chatFiller) : '';
+          if (!alreadySaid) chatFillerCtl.abort();
+          if (_chatStreamsBySender.get(senderId)?.streamId !== myStreamId) return null;
+          const builtAt = Date.now();
+          const built = tp.buildTransparentPrompt({ action: isAnswer ? 'answer' : 'chat', request: asked,
+            instruction: skillPromptBlock ? `Skill instructions:\n${skillPromptBlock}` : undefined, alreadySaid: alreadySaid || undefined });
+          if (!isAnswer) recordAsked();
+          const mirror = (fn: (m: any) => void) => { try { fn(PhoneMirrorService.getInstance()); } catch { /* mirror only */ } };
+          mirror(m => m.publishUserMessage(String(myStreamId), asked, { awaitingAnswer: true }));
+          const current = () => _chatStreamsBySender.get(senderId)?.streamId === myStreamId;
+          let finalText = '';
+          let failure: string | null = null;
+          let ending: string = 'done';
+          let truncated = false;
+          let truncatedReason: string | undefined;
+          try {
+            const tpStream = llmHelper.streamChatWithOutcome(built.user, imagePaths, undefined, built.system, true, true, ['transcript'], myController.signal);
+            // Safety net for a stalled provider: the turn ends visibly instead of spinning forever.
+            ending = await raceStreamWithDeadline({
+              stream: tpStream.stream,
+              firstUsefulDeadlineMs: 45_000,
+              interTokenStallMs: 15_000,
+              isUsefulYet: () => finalText.trim().length > 0,
+              shouldAbort: () => !current(),
+              onToken: (tok: string) => {
+                if (!tok) return;
+                finalText += tok;
+                event.sender.send('gemini-stream-token', tok, { streamId: myStreamId });
+                mirror(m => m.publishToken(String(myStreamId), tok));
+              },
+              onCleanup: (reason) => { if (reason === 'first_useful_timeout' || reason === 'stall_timeout') myController?.abort(new Error(reason)); },
+            });
+            truncated = tpStream.outcome.truncated === true;
+            truncatedReason = tpStream.outcome.reason;
+            if (ending === 'first_useful_timeout' || ending === 'stall_timeout') failure = 'the AI provider stopped responding';
+            else if (truncated && /provider_(failed|died)/.test(truncatedReason ?? '')) failure = 'the AI provider stopped partway';
+          } catch (tpErr: any) {
+            failure = String(tpErr?.message || tpErr || 'the request failed');
+          }
+          if (!current()) { mirror(m => m.publishError(String(myStreamId), 'a newer question replaced it')); return null; }
+          if (!finalText.trim()) {
+            failure = failure ?? 'the AI returned an empty answer';
+            event.sender.send('gemini-stream-error', `Couldn't get an answer: ${failure}`, { streamId: myStreamId });
+            mirror(m => m.publishError(String(myStreamId), failure));
+            return null;
+          }
+          const incomplete = truncated || Boolean(failure);
+          // A failure keeps what was shown and adds one visible line after it.
+          if (failure) {
+            const line = `\n\n(Couldn't finish: ${failure}. Press again to retry.)`;
+            event.sender.send('gemini-stream-token', line, { streamId: myStreamId });
+            finalText += line;
+          }
+          event.sender.send('gemini-stream-done', { finalText, streamId: myStreamId, incomplete, incompleteReason: incomplete ? (truncatedReason ?? failure ?? undefined) : undefined });
+          mirror(m => incomplete ? m.publishError(String(myStreamId), 'it was cut off') : m.publishDone(String(myStreamId), finalText));
+          if (finalText.trim() && !incomplete && !contextChangedSinceAsk()) {
+            intelligenceManager.addAssistantMessage(finalText, forThisTurn(undefined), 'manual_chat');
+            // Both an answer and a chat reply count as answered: the next press responds to what came after.
+            tp.markLiveAnswerCutoff(builtAt);
+          }
+          return null;
         }
 
         // ── CONTEXT INTELLIGENCE V3 — wired manual-chat surface ──────────────
@@ -8087,7 +8178,7 @@ export function initializeIpcHandlers(appState: AppState): void {
           helper: appState.processingHelper.getLLMHelper(),
           question: fillerQ,
           signal: controller.signal,
-          onToken: (chunk: string) => { if (!daSender.isDestroyed()) daSender.send('intelligence-filler-token', { chunk, generationId: daFillerId }); },
+          onToken: (chunk: string) => { if (daSender.isDestroyed()) return false; daSender.send('intelligence-filler-token', { chunk, generationId: daFillerId }); return true; },
         });
       }
     } catch (fillerErr: any) { console.warn('[Filler] direct-assist hook skipped:', fillerErr?.message); }
@@ -8656,6 +8747,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   // Personal build (Natively Z): Settings → Intelligence → My Context.
   require('./llm/myContext').registerMyContextIpc(safeHandle);
+  require('./llm/transparentPrompt').registerPromptIpc(safeHandle); // Personal build: Settings → Intelligence → Prompt
   require('./services/mock-interview/mockInterviewIpc').registerMockInterviewIpc(appState, safeHandle);
   require('./llm/filler').registerFillerIpc(safeHandle, () => appState.processingHelper.getLLMHelper());
   require('./llm/backupChain').registerBackupIpc(safeHandle);
@@ -15669,7 +15761,9 @@ export function initializeIpcHandlers(appState: AppState): void {
           // Vision-first: run the ScreenUnderstandingService so the image is hashed, optimized,
           // and routed through the vision provider fallback chain. The structured result becomes
           // the screenContext that PromptAssembler consumes.
-          try {
+          // Personal build: with the transparent prompt the screenshot itself goes to the model as an image;
+          // no hidden screen-reading prompt runs first.
+          if (!require('./llm/transparentPrompt').isTransparentPromptOn()) try {
             const {
               getScreenUnderstandingService,
             } = require('./services/screen/ScreenUnderstandingService');
@@ -16785,6 +16879,8 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   // Query live meeting with JIT RAG
   safeHandle('rag:query-live', async (event, { query }: { query: string }) => {
+    // Personal build: the Answer button goes through the transparent prompt, never a hidden RAG prompt.
+    if (require('./llm/transparentPrompt').isTransparentPromptOn()) return { fallback: true };
     const ragManager = appState.getRAGManager();
 
     if (!ragManager || !ragManager.isReady()) {
@@ -19791,7 +19887,10 @@ export function initializeIpcHandlers(appState: AppState): void {
         // The design on the table joins this turn's context (a follow-up typed
         // on the phone refines the design drawn on the desktop).
         if (phoneDiagramTurn) context = withDiagramTurnBlock(context, phoneDiagramTurn) || context;
-        const stream = llmHelper.streamChat(message, phoneImagePaths.length ? phoneImagePaths : undefined, context, phoneBasePrompt(resolveCodingPromptSignals({ answerType: phoneRouteOptions?.answerType as any, question: message }), 'live'), false, false, [], phoneController.signal, undefined, phoneRouteOptions);
+        // Personal build (Natively Z): phone chat uses the transparent prompt (Settings → Intelligence → Prompt).
+        const stream = require('./llm/transparentPrompt').isTransparentPromptOn()
+          ? require('./llm/transparentPrompt').streamTransparent(llmHelper, { action: 'chat', request: message }, phoneImagePaths, phoneController.signal) as AsyncGenerator<string>
+          : llmHelper.streamChat(message, phoneImagePaths.length ? phoneImagePaths : undefined, context, phoneBasePrompt(resolveCodingPromptSignals({ answerType: phoneRouteOptions?.answerType as any, question: message }), 'live'), false, false, [], phoneController.signal, undefined, phoneRouteOptions);
         let full = '';
         let phoneSuperseded = false;
         // Deadline-guarded (Issue 1) — this is a live streaming surface too: a hung

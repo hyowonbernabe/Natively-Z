@@ -46,8 +46,17 @@ function getStoryPriorities(): StoryPriorities {
 
 export interface OutputStyleConfig { text: string; enabled: boolean }
 
+/** Personal build default speaking style, used until the user saves their own (a saved blank stays blank). */
+export const DEFAULT_OUTPUT_STYLE = `Speak as me, in first person.
+Use plain, everyday language: simple words, short sentences, no jargon. If a technical term is needed, say what it means in everyday words.
+Keep it casual but professional, like talking to someone I respect.
+Use plenty of transition words, like "and then", "the thing is", "what I ended up doing was", so it flows like real speech, not a written essay.
+(How many filler words like "um" or "yeah" to use is set separately, by the Filler words setting.)
+Use contractions (I'm, didn't, it's).
+No bullet points or headings. It's meant to be said out loud.`;
+
 export function resolveOutputStyleConfig(saved: unknown, legacyVoice = ''): OutputStyleConfig {
-    if (saved === undefined) return { text: legacyVoice, enabled: true };
+    if (saved === undefined) return { text: legacyVoice || DEFAULT_OUTPUT_STYLE, enabled: true };
     if (saved && typeof saved === 'object' && typeof (saved as OutputStyleConfig).text === 'string') {
         return { text: (saved as OutputStyleConfig).text, enabled: (saved as OutputStyleConfig).enabled !== false };
     }
@@ -63,7 +72,8 @@ export function getOutputStyle(): OutputStyleConfig {
         const config = resolveOutputStyleConfig(saved, legacyVoice);
         // Copy the existing preferences once; later context edits never overwrite
         // this field, and an explicitly blank or disabled style stays that way.
-        if (saved === undefined && config.text && config.text.length <= OUTPUT_STYLE_MAX_CHARS) settings.set('outputStyle', config);
+        // (The built-in default is not copied: it stays a default, so later improvements reach unsaved users.)
+        if (saved === undefined && legacyVoice && config.text && config.text.length <= OUTPUT_STYLE_MAX_CHARS) settings.set('outputStyle', config);
         return config;
     } catch { return { text: '', enabled: true }; }
 }
@@ -120,6 +130,8 @@ What happened, what I did, how it ended.
 
 export function registerMyContextIpc(safeHandle: (channel: string, fn: (...args: any[]) => any) => void): void {
     registerAnswerLengthIpc(safeHandle);
+    require('./fillerWords').registerFillerWordsIpc(safeHandle);
+    require('../audio/scribeOptions').registerScribeOptionsIpc(safeHandle);
     safeHandle('output-style:get', () => getOutputStyle());
     safeHandle('output-style:set', (_event: unknown, config: OutputStyleConfig) => {
         if (!config || typeof config.text !== 'string' || typeof config.enabled !== 'boolean' || config.text.length > OUTPUT_STYLE_MAX_CHARS) {

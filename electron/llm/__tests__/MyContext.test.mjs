@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dist = (rel) => pathToFileURL(path.resolve(here, '../../../dist-electron/electron', rel)).href;
-const { readMyContext, selectMyContext, buildMyContextBlock, splitMyContext, renderMyContextBlock, resolveOutputStyleConfig, withOutputStyleSystemPrompt, MY_CONTEXT_MAX_CHARS, contextStories, validateStoryPriorities } = await import(dist('llm/myContext.js'));
+const { readMyContext, selectMyContext, buildMyContextBlock, splitMyContext, renderMyContextBlock, resolveOutputStyleConfig, DEFAULT_OUTPUT_STYLE, withOutputStyleSystemPrompt, MY_CONTEXT_MAX_CHARS, contextStories, validateStoryPriorities } = await import(dist('llm/myContext.js'));
 
 const FILE = `# Me
 My name is Hyowon. I built Messenger Z.
@@ -158,7 +158,7 @@ test('legacy instructions seed only an unset Output Style; later context changes
   const migrated = resolveOutputStyleConfig(undefined, 'Keep it conversational.');
   assert.deepEqual(migrated, { text: 'Keep it conversational.', enabled: true });
   assert.deepEqual(resolveOutputStyleConfig(migrated, 'Now use a different voice.'), migrated);
-  assert.deepEqual(resolveOutputStyleConfig(undefined, ''), { text: '', enabled: true });
+  assert.deepEqual(resolveOutputStyleConfig(undefined, ''), { text: DEFAULT_OUTPUT_STYLE, enabled: true }); // Personal build: built-in default style
 });
 
 test('no style section means no added speaking policy; empty and disabled context stay empty', () => {

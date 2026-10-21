@@ -681,6 +681,11 @@ export class SessionTracker {
         return this.lastInterimInterviewer;
     }
 
+    /** Personal build (Natively Z): the condensed start of a very long meeting, for the transparent prompt. */
+    getTranscriptEpochSummaries(): string[] {
+        return [...this.transcriptEpochSummaries];
+    }
+
     /**
      * Context items for LLM prompts, including the latest interim interviewer
      * partial when finals have not caught up yet (matches What to Answer path).

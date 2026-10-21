@@ -198,6 +198,11 @@ export interface IntelligenceModeEvents {
  * whether any token reached the renderer (under the run's own generation id)
  * and what the prefix buffer still held. Undefined when the run never painted.
  */
+// Personal build (Natively Z): safety-net deadlines for a transparent live answer. Generous, because the
+// prompt now carries the whole meeting and My Context; the backup chain handles slow first tokens sooner.
+const TRANSPARENT_FIRST_TOKEN_MS = 45_000;
+const TRANSPARENT_STALL_MS = 15_000;
+
 interface SpeculativeStreamed {
     emitted: boolean;
     pendingBuffer: string;
@@ -1182,7 +1187,8 @@ export class IntelligenceEngine extends EventEmitter {
             return;
         }
 
-        if (plannerDecision.kind !== 'answer') {
+        // Personal build: with the transparent prompt every trigger is answered; no hidden re-routing to Clarify/Recap.
+        if (plannerDecision.kind !== 'answer' && !require('./llm/transparentPrompt').isTransparentPromptOn()) {
             await this.runPlannerDecision(plannerDecision, trigger.lastQuestion);
             return;
         }
@@ -1230,12 +1236,13 @@ export class IntelligenceEngine extends EventEmitter {
                         // Personal build (Natively Z): the adopted head-start answer is still coming, so bridge it too.
                         const fillerGen = this.currentGenerationId;
                         const fillerSignal = this.whatToAnswerCancellationToken?.signal;
-                        if (fillerSignal && trigger.lastQuestion) {
+                        // (Not with the transparent prompt: there the filler is the answer's first sentence, and this answer is already written.)
+                        if (fillerSignal && trigger.lastQuestion && !require('./llm/transparentPrompt').isTransparentPromptOn()) {
                             void require('./llm/filler').runFiller({
                                 helper: this.llmHelper,
                                 question: trigger.lastQuestion,
                                 signal: fillerSignal,
-                                onToken: (chunk: string) => { if (this.currentGenerationId === fillerGen) this.emit('filler_token', chunk, fillerGen); },
+                                onToken: (chunk: string) => { if (this.currentGenerationId !== fillerGen) return false; this.emit('filler_token', chunk, fillerGen); return true; },
                             });
                         }
                         return;
@@ -1463,6 +1470,9 @@ export class IntelligenceEngine extends EventEmitter {
      */
     private revealSpeculativeAnswer(finished: SpeculativeAnswer, automatic: boolean, streamed?: SpeculativeStreamed): void {
         let text = finished.text;
+        // Personal build: a transparent answer is shown exactly as written (no cleanup or reshaping after it streamed).
+        const asWritten = require('./llm/transparentPrompt').isTransparentPromptOn();
+        if (!asWritten) {
         // A speculative run is never `isCoding` (see runWhatShouldISay), so it
         // never gets the live path's stripVerificationSpec (its STREAM gets a
         // StreamingSpecStripper when verification is on; this is the text that
@@ -1484,6 +1494,7 @@ export class IntelligenceEngine extends EventEmitter {
         } catch (err) {
             console.warn('[IntelligenceEngine] Prefetched answer cleanup failed; revealing it as generated:', err);
         }
+        }
         if (!text.trim()) {
             console.warn('[IntelligenceEngine] Prefetched answer was empty — nothing to reveal');
             // An adopted stream already opened a row; it gets no final, so close it.
@@ -1500,7 +1511,7 @@ export class IntelligenceEngine extends EventEmitter {
         //   • Without one (the legacy answerLLM path): record only. Reshaping text
         //     against a guessed plan could flatten an answer the model was asked to
         //     structure; recording still lets the NEXT answer be checked against it.
-        if (isIntelligenceFlagEnabled('answerDiversityGuard')) {
+        if (!asWritten && isIntelligenceFlagEnabled('answerDiversityGuard')) {
             try {
                 if (finished.answerType) {
                     const shaped = applyAnswerContract({
@@ -1547,6 +1558,8 @@ export class IntelligenceEngine extends EventEmitter {
         else if (designNote && 'mayFollowUp' in designNote) this.session.touchActiveDesign(false, true);
         else if (designNote) this.session.touchActiveDesign();
         this.session.addAssistantMessage(text, finished.writeDecision, 'what_to_answer');
+        // Personal build: the adopted head start is the answer now, so the EARLIER/NEW line moves to when it was built.
+        try { require('./llm/transparentPrompt').markLiveAnswerCutoff(this.transparentHeadStartAt ?? Date.now()); } catch { /* split only */ }
         if (finished.writeDecision?.policy !== 'do_not_store') {
             this.session.pushUsage({ type: 'assist', timestamp: Date.now(), question: finished.question, answer: text });
             // THE ADOPTED ANSWER'S ONLY RECORDING POINT.
@@ -1850,7 +1863,8 @@ export class IntelligenceEngine extends EventEmitter {
             // reference, which is precisely what the follow-up then asked for.
             // After the answer AND after the turn is recorded, so it costs the
             // user nothing and holds nothing up.
-            if (imagePaths?.length) {
+            // Personal build: no hidden screen-reading prompt with the transparent prompt on.
+            if (imagePaths?.length && !require('./llm/transparentPrompt').isTransparentPromptOn()) {
                 const { transcribeScreenForMemory } = require('./services/screen/screenTranscription');
                 // A read that throws is a read that failed: the turn must not be
                 // left saying "still being read" for the rest of the session.
@@ -1872,11 +1886,145 @@ export class IntelligenceEngine extends EventEmitter {
     }
 
     async runWhatShouldISay(question?: string, confidence: number = 0.8, imagePaths?: string[], options?: { speculative?: boolean; skipCooldown?: boolean; screenContext?: ScreenContext; promptInstruction?: string; activeSkill?: { id: string; name: string; promptBlock: string }; domContext?: string; forceFresh?: boolean }): Promise<string | null> {
+        this.transparentIncomplete = false;
         const answer = await this.runWhatShouldISayInner(question, confidence, imagePaths, options);
-        if (!options?.speculative) {
+        // Personal build: a transparent answer that failed or was cut off is shown, never recorded.
+        if (!options?.speculative && !this.transparentIncomplete) {
             this.recordLiveTurn(answer, options?.screenContext, question, imagePaths?.length ?? 0, imagePaths);
         }
         return answer;
+    }
+
+    /**
+     * Personal build (Natively Z): one live answer from the transparent prompt
+     * (electron/llm/transparentPrompt.ts). Streams what the model writes and stores
+     * exactly that: no planner, no hidden repair or reshaping pass after it is shown.
+     */
+    private transparentHeadStartAt: number | null = null;
+    private transparentIncomplete = false;
+    private async runTransparentAnswer(a: {
+        question?: string; confidence: number; imagePaths?: string[];
+        options?: { screenContext?: ScreenContext; promptInstruction?: string; domContext?: string; activeSkill?: { id: string; name: string; promptBlock: string } };
+        isSpeculative: boolean; generationId: number; controller: AbortController; isSuperseded: () => boolean;
+    }): Promise<string | null> {
+        const { confidence, imagePaths, options, isSpeculative, generationId, controller, isSuperseded } = a;
+        const label = a.question || 'What to Answer';
+        if (isSpeculative) this.transparentHeadStartAt = Date.now();
+        const fillerQuestion = a.question || this.session.getLastInterviewerTurn() || undefined;
+        // The filler line is the answer's first sentence, so the answer waits for it (briefly) and continues
+        // from it. A filler later than the wait is cancelled, so it can never show up out of step.
+        let alreadySaid = '';
+        if (!isSpeculative && fillerQuestion) {
+            const filler = require('./llm/filler') as typeof import('./llm/filler');
+            const fillerCtl = new AbortController();
+            alreadySaid = await filler.waitForFiller(filler.runFiller({
+                helper: this.llmHelper,
+                question: fillerQuestion,
+                signal: AbortSignal.any([controller.signal, fillerCtl.signal]),
+                onToken: (chunk: string) => { if (isSuperseded()) return false; this.emit('filler_token', chunk, generationId); return true; },
+            }));
+            if (!alreadySaid) fillerCtl.abort();
+            if (isSuperseded()) return null;
+        }
+        // A head start that did not produce a usable answer must free its slot, so the
+        // real trigger answers afresh instead of adopting nothing (or a fragment).
+        const dropHeadStart = () => {
+            if (this.speculativeGenerationId === generationId) {
+                this.speculativeText = null;
+                this.speculativeTextExpiry = Infinity;
+                this.speculativeAnswer = null;
+                this.speculativeAdoptedGenerationId = null;
+            }
+        };
+        const wta = this.whatToAnswerLLM;
+        if (!wta) { dropHeadStart(); this.setMode('idle'); return null; }
+        const truncation: { truncated: boolean; reason?: string } = { truncated: false };
+        let text = '';
+        // A head start paints only once the dispatch adopts it mid-stream.
+        let painting = !isSpeculative;
+        if (isSpeculative) {
+            this.speculativeAdoptHook = (adopted: number) => {
+                if (adopted !== generationId || painting) return;
+                painting = true;
+                if (text) this.emit('suggested_answer_token', text, label, confidence, generationId);
+            };
+        }
+        const instruction = [options?.promptInstruction, options?.activeSkill?.promptBlock ? `Skill instructions:\n${options.activeSkill.promptBlock}` : '']
+            .filter(Boolean).join('\n\n') || undefined;
+        let ending: 'done' | 'first_useful_timeout' | 'stall_timeout' | 'aborted' | 'error' = 'done';
+        const startedAt = Date.now();
+        let firstTokenAt = 0;
+        try {
+            // Safety net for a provider that stalls (the backup chain covers only the first token, and
+            // not every route): the turn ends visibly instead of spinning forever.
+            ending = await raceStreamWithDeadline({
+                stream: wta.generateStream(a.question || '', undefined, undefined, imagePaths, options?.screenContext,
+                    instruction, undefined, options?.domContext, undefined, undefined, undefined, undefined, controller.signal, truncation, isSpeculative, alreadySaid || undefined),
+                firstUsefulDeadlineMs: TRANSPARENT_FIRST_TOKEN_MS,
+                interTokenStallMs: TRANSPARENT_STALL_MS,
+                isUsefulYet: () => text.trim().length > 0,
+                shouldAbort: () => isSuperseded(),
+                onToken: (token: string) => {
+                    if (!text && token) firstTokenAt = Date.now();
+                    text += token;
+                    if (painting) this.emit('suggested_answer_token', token, label, confidence, generationId);
+                },
+                onCleanup: (reason) => { if (reason === 'first_useful_timeout' || reason === 'stall_timeout') controller.abort(new Error(reason)); },
+            });
+        } catch (err: any) {
+            ending = 'error';
+            console.warn('[IntelligenceEngine] transparent answer failed:', err?.message ?? err);
+        } finally {
+            if (isSpeculative) this.speculativeAdoptHook = null;
+            // Where the seconds go: first word (provider prefill + thinking) vs. writing the rest.
+            console.log(`[Transparent] ${isSpeculative ? 'head start' : 'answer'} on ${this.llmHelper.getCurrentModel?.() ?? '?'}: first word ${firstTokenAt ? firstTokenAt - startedAt : '-'} ms, total ${Date.now() - startedAt} ms, ${text.length} chars, ending ${ending}`);
+        }
+        if (isSuperseded()) { if (isSpeculative) dropHeadStart(); return null; }
+        const providerError = truncation.reason?.startsWith('provider_error') ? truncation.reason.slice('provider_error: '.length)
+            : truncation.truncated && /provider_(failed|died)/.test(truncation.reason ?? '') ? 'the AI provider stopped partway' : null;
+        const timedOut = ending === 'first_useful_timeout' || ending === 'stall_timeout';
+        const cancelled = controller.signal.aborted && !timedOut;
+        const failed = timedOut || Boolean(providerError) || ending === 'error';
+        // A head start already showing that then fails is finished like a live answer (text kept, one failure line).
+        if (isSpeculative && !(painting && !cancelled && (failed || !text.trim()))) {
+            if (cancelled || failed || !text.trim()) {
+                if (painting && text) this.emit('suggested_answer_discard', 'head_start_failed');
+                dropHeadStart();
+                this.setMode('idle');
+                return null;
+            }
+            const writeDecision: SessionWriteDecision | undefined = truncation.truncated
+                ? { policy: 'do_not_store', blockedFromSessionTracker: true, reason: `truncated:${truncation.reason}` } : undefined;
+            return this.completeSpeculativeRun(generationId, a.question, confidence, text, writeDecision,
+                painting ? { emitted: Boolean(text), pendingBuffer: '' } : undefined);
+        }
+        // Cancelled (the user started talking over it): nothing is stored, the row closes.
+        if (cancelled) {
+            this.emit('suggested_answer_discard', 'cancelled');
+            this.setMode('idle');
+            return null;
+        }
+        const failure = providerError ?? (timedOut ? 'the AI provider stopped responding' : ending === 'error' ? 'the request failed' : null);
+        if (!text.trim() && !failure) {
+            if (isSpeculative) dropHeadStart();
+            this.emit('suggested_answer_discard', 'no_answer');
+            this.setMode('idle');
+            return null;
+        }
+        // A failure keeps what was already shown and adds one visible line; it is never stored as an answer.
+        const shown = failure ? `${text}${text.trim() ? '\n\n' : ''}(Couldn't finish: ${failure}. Press again to retry.)` : text;
+        const incomplete = Boolean(failure) || truncation.truncated;
+        this.transparentIncomplete = incomplete;
+        if (isSpeculative) dropHeadStart(); // an adopted head start that failed is settled here, not revealed
+        if (failure && painting) this.emit('suggested_answer_token', shown.slice(text.length), label, confidence, generationId);
+        if (!incomplete) {
+            this.session.addAssistantMessage(text, undefined, 'what_to_answer');
+            this.session.pushUsage({ type: 'assist', timestamp: Date.now(), question: label, answer: text, imagePaths });
+        }
+        this.emit('suggested_answer', shown, label, confidence, generationId, undefined, incomplete ? (truncation.reason ?? 'provider_error') : undefined);
+        this.setMode('idle');
+        // The shown text (with its failure line) goes back, so the caller never swaps it for a "no answer" note.
+        return shown || null;
     }
 
     private async runWhatShouldISayInner(question?: string, confidence: number = 0.8, imagePaths?: string[], options?: { speculative?: boolean; skipCooldown?: boolean; screenContext?: ScreenContext; promptInstruction?: string; activeSkill?: { id: string; name: string; promptBlock: string }; domContext?: string; forceFresh?: boolean }): Promise<string | null> {
@@ -2027,6 +2175,9 @@ export class IntelligenceEngine extends EventEmitter {
             speculative: isSpeculative,
         });
         this.lastTrace = trace;
+
+        // Personal build (Natively Z): the transparent prompt path replaces the planner/V3/repair pipeline below.
+        if (require('./llm/transparentPrompt').isTransparentPromptOn()) return this.runTransparentAnswer({ question, confidence, imagePaths, options, isSpeculative, generationId, controller: whatToAnswerCancellationToken, isSuperseded: isWtaSuperseded });
 
         // ── REQUEST SNAPSHOT (audit findings #6 + #3 + #9) ─────────────────
         // Capture the active mode ONCE here, at t0, before any `await` boundary.
@@ -4455,7 +4606,7 @@ export class IntelligenceEngine extends EventEmitter {
                     helper: this.llmHelper,
                     question: answerPlan.question,
                     signal: whatToAnswerCancellationToken.signal,
-                    onToken: (chunk: string) => { if (!isWtaSuperseded()) this.emit('filler_token', chunk, generationId); },
+                    onToken: (chunk: string) => { if (isWtaSuperseded()) return false; this.emit('filler_token', chunk, generationId); return true; },
                 });
             }
             const stream = this.whatToAnswerLLM.generateStream(preparedTranscript, temporalContext, intentResult, imagePaths, screenContext, options?.promptInstruction, options?.activeSkill, options?.domContext, candidateProfile || undefined, answerPlan, modeContextPromise, requestSnapshot, whatToAnswerCancellationToken.signal, wtaTruncation);
@@ -7546,7 +7697,9 @@ export class IntelligenceEngine extends EventEmitter {
         try {
             // No typed question (Recap, Clarify…): give the model the action and what was actually just said.
             let q = String(question || '').trim();
-            if (!q) {
+            // Personal build: the transparent filler reads the meeting itself; no made-up "about to start" text.
+            if (!q && require('./llm/transparentPrompt').isTransparentPromptOn()) q = String(this.session.getLastInterviewerTurn() || '').trim();
+            else if (!q) {
                 let recent = '';
                 try { recent = String(this.session.getFormattedContext(90) || '').slice(-500); } catch { /* no session yet */ }
                 q = `(You are about to start ${action}.)` + (recent ? `\nWhat was just said:\n${recent}` : '');
@@ -7559,7 +7712,7 @@ export class IntelligenceEngine extends EventEmitter {
                 helper: this.llmHelper,
                 question: q,
                 signal: ac.signal,
-                onToken: (chunk: string) => { if (this._fillerAbort === ac) this.emit('filler_token', chunk, gen); },
+                onToken: (chunk: string) => { if (this._fillerAbort !== ac) return false; this.emit('filler_token', chunk, gen); return true; },
             });
         } catch { /* the filler never blocks an answer */ }
     }

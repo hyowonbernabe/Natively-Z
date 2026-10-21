@@ -48,6 +48,8 @@ export class FollowUpQuestionsLLM {
     }
 
     async *generateStream(context: string, options?: QuickActionContextOptions): AsyncGenerator<string> {
+        // Personal build (Natively Z): transparent prompt (Settings → Intelligence → Prompt).
+        if (require('./transparentPrompt').isTransparentPromptOn()) { yield* require('./transparentPrompt').streamTransparent(this.llmHelper, { action: 'follow_up_questions' }); return; }
         try {
             const prompt = this.resolvePrompt();
             const message = this.buildTurn(prompt, context, options);

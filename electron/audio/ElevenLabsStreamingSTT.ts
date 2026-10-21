@@ -5,6 +5,7 @@ import { StreamingPcmResampler } from './streamingPcmResampler';
 import { RECOGNITION_LANGUAGES, TAGLISH_LANGUAGE_KEY } from '../config/languages';
 import { streamingStttWsOptions } from './dnsHelpers';
 import { RealtimeSilenceTail } from './realtimeSilenceTail';
+import { getScribeOptions, type ScribeOptions } from './scribeOptions';
 
 const ELEVENLABS_WS_URL = 'wss://api.elevenlabs.io/v1/speech-to-text/realtime';
 // Cap reconnect attempts so a flapping network can't drive an indefinite WS
@@ -68,7 +69,16 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
         format: () => ({ sampleRate: this.inputSampleRate, channels: 1 }),
         sink: (pcm) => this.sendAudio(pcm),
     });
-    constructor(apiKey: string, private readonly createSocket: (url: string, options: any) => WebSocket = (url, options) => new WebSocket(url, options)) {
+    // Personal build (Natively Z): Scribe options (clean transcript, word list, turn prediction), read per connect.
+    // Remembered for the whole app run: scribe_v2_realtime answered "turn_prediction is not supported" (2026-10-17).
+    private static turnPredictionRefused = false;
+    private lastCommittedText = '';
+    private sendPreviousText = false;
+    private draining = false;
+    private loggedSpeakerIds = false;
+    private quickReconnect = false; // one planned immediate reconnect (the vad fallback)
+    constructor(apiKey: string, private readonly createSocket: (url: string, options: any) => WebSocket = (url, options) => new WebSocket(url, options),
+        private readonly options: () => ScribeOptions = getScribeOptions) {
         super();
         this.apiKey = apiKey;
     }
@@ -194,15 +204,23 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
      * that leniency.
      */
     private audioMessage(audioBase64: string, commit: boolean): Record<string, unknown> {
-        return {
+        const msg: Record<string, unknown> = {
             message_type: 'input_audio_chunk',
             audio_base_64: audioBase64,
             commit,
             sample_rate: this.targetSampleRate,
         };
+        // Personal build: after a reconnect, the first chunk carries the last words heard (API: first chunk
+        // only, best under 50 characters) so the new session doesn't start without context.
+        if (this.sendPreviousText) {
+            this.sendPreviousText = false;
+            if (this.lastCommittedText) msg.previous_text = this.lastCommittedText.slice(-50);
+        }
+        return msg;
     }
 
     private emitCommitted(text: string): void {
+        this.lastCommittedText = text;
         // Only the primary commit is a transcript. Delayed metadata never repeats it.
         this.emit('transcript', { text, isFinal: true, confidence: 1.0 });
     }
@@ -228,7 +246,7 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
         // Native quiet keepalives are not fresh speech. Reopening on them after
         // idle would recreate the same 15-second empty/silent session loop.
         if (this.connectOnAudioOnly && !this.ws && !this.isConnecting && !this.reconnectTimer && pcm.every(byte => byte === 0)) return;
-        if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.isSessionReady) {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.isSessionReady || this.draining) {
             this.buffer.push(pcm);
             this.bufferedBytes += pcm.length;
             let dropped = 0;
@@ -241,6 +259,11 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
             if (!this.ws && !this.isConnecting && this.shouldReconnect && !this.reconnectTimer) this.connect();
             return;
         }
+        this.sendPcmNow(pcm);
+    }
+
+    private sendPcmNow(pcm: Buffer): void {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
         // Bounded 100 ms messages, including large capture callbacks and reconnect replay.
         const samples = new Int16Array(pcm.buffer, pcm.byteOffset, pcm.byteLength / 2);
         this.pcmAccumulator.push(samples);
@@ -280,8 +303,12 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
         console.log(`[ElevenLabsStreaming] Connecting`, { hasApiKey: Boolean(this.apiKey) });
 
         // raw WebSocket URL with parameters
+        const opts = this.options();
+        const strategy = opts.turnPrediction && !ElevenLabsStreamingSTT.turnPredictionRefused ? 'turn_prediction' : 'vad';
         let url = `${ELEVENLABS_WS_URL}?model_id=scribe_v2_realtime&audio_format=pcm_${this.targetSampleRate}`
-            + `&commit_strategy=vad&vad_silence_threshold_secs=${ELEVENLABS_VAD_SILENCE_SECS}`;
+            + `&commit_strategy=${strategy}&vad_silence_threshold_secs=${ELEVENLABS_VAD_SILENCE_SECS}`;
+        if (opts.clean) url += '&no_verbatim=true';
+        for (const term of opts.keyterms) url += `&keyterms=${encodeURIComponent(term)}`;
         
         // Always enable language detection metadata; only pin to a specific code when one is set
         if (this.languageCode) {
@@ -330,14 +357,11 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
                         this.isSessionReady = true;
                         this.emit('connected');
                         
-                        // Flush buffered audio now that session is strictly ready
-                        while (this.buffer.length > 0) {
-                            const chunk = this.buffer.shift();
-                            if (chunk) {
-                                this.bufferedBytes -= chunk.length;
-                                this.queuePcm(chunk);
-                            }
-                        }
+                        // Personal build: start of a later session? Give it the last words for context.
+                        this.sendPreviousText = Boolean(this.lastCommittedText);
+                        // Replay buffered audio paced (about 5x real time), not in one burst that could
+                        // overflow the server queue; new audio waits behind it to keep order.
+                        this.drainBuffer(socket);
                         break;
 
                     case 'partial_transcript':
@@ -355,17 +379,43 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
                         if (msg.text) { this.reconnectAttempts = 0; this.emitCommitted(msg.text); }
                         break;
                     case 'committed_transcript_with_timestamps':
+                        if (!this.loggedSpeakerIds && Array.isArray(msg.words) && msg.words.some((w: any) => w?.speaker_id)) {
+                            this.loggedSpeakerIds = true;
+                            console.log('[ElevenLabsStreaming] speaker_id present in realtime words:', [...new Set(msg.words.map((w: any) => w.speaker_id).filter(Boolean))]);
+                        }
                         if (msg.language_code) {
                             const locale = msg.language_code === 'fil' ? 'fil-PH' : Object.values(RECOGNITION_LANGUAGES).find(lang => lang.iso639 === msg.language_code)?.bcp47;
                             this.emit('languageDetected', locale || msg.language_code);
                         }
                         break;
 
+                    case 'invalid_request':
+                        if (!this.isSessionReady && !ElevenLabsStreamingSTT.turnPredictionRefused && this.options().turnPrediction) {
+                            // Personal build: this model may not accept turn_prediction; retry with vad.
+                            console.warn('[ElevenLabsStreaming] turn_prediction refused; falling back to vad:', msg.error);
+                            ElevenLabsStreamingSTT.turnPredictionRefused = true;
+                            this.quickReconnect = true;
+                            socket.close();
+                            break;
+                        }
+                        this.fail(msgType, String(msg.error || 'Check your Speech-to-Text key permissions and account settings.'));
+                        break;
+                    case 'session_time_limit_exceeded':
+                        // Personal build: the session is simply over; a new one starts after the shortest backoff.
+                        this.reconnectAttempts = 0;
+                        socket.close();
+                        break;
+                    case 'resource_exhausted':
+                    case 'queue_overflow':
+                        // Personal build: the server is busy; wait longer before retrying (backoff starts at 8 s).
+                        this.reconnectAttempts = Math.max(this.reconnectAttempts, 3);
+                        this.emit('warning', { code: msgType, message: String(msg.error || 'ElevenLabs is busy.') });
+                        socket.close();
+                        break;
                     case 'auth_error':
                     case 'quota_exceeded':
                     case 'unaccepted_terms':
                     case 'input_error':
-                    case 'invalid_request':
                     case 'chunk_size_exceeded':
                         this.fail(msgType, String(msg.error || 'Check your Speech-to-Text key permissions and account settings.'));
                         break;
@@ -401,7 +451,10 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
             console.log(`[ElevenLabsStreaming] Closed: code=${code} reason=${reason}`);
             const idle = this.serverIdle || code === 1000 && (this.sessionAudioBytes === 0 || Date.now() - this.lastAudioSentAt > 10000);
             this.emit('warning', { code: idle ? 'session_idle' : 'session_closed', message: `Scribe closed (${code}); ${this.sessionAudioBytes} PCM bytes sent in this session.` });
-            if (this.shouldReconnect && idle) {
+            if (this.shouldReconnect && this.quickReconnect && !this.reconnectTimer) {
+                this.quickReconnect = false;
+                this.connect(); // planned: retry right away with vad (turn_prediction was refused)
+            } else if (this.shouldReconnect && idle) {
                 this.connectOnAudioOnly = true;
                 this.emit('idle'); // stay active; next captured audio owns reopening
             } else if (this.shouldReconnect) {
@@ -421,12 +474,38 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
             const status = response.statusCode;
             response.resume();
             if (status === 401 || status === 403) this.fail('authentication', `HTTP ${status}: check your API key and Speech-to-Text permission.`);
+            else if (status === 400 && !ElevenLabsStreamingSTT.turnPredictionRefused && this.options().turnPrediction) {
+                // Personal build: a refused turn_prediction may come back as a plain HTTP 400; retry with vad.
+                ElevenLabsStreamingSTT.turnPredictionRefused = true;
+                this.quickReconnect = true;
+                socket.terminate();
+            }
             else socket.terminate();
         });
     }
 
+    private drainToken = 0;
+    private drainBuffer(socket: WebSocket): void {
+        const token = ++this.drainToken; // a stale step from an older session must not end this replay
+        this.draining = true;
+        const step = () => {
+            if (token !== this.drainToken) return;
+            if (this.ws !== socket || !this.isSessionReady) { this.draining = false; return; }
+            // About 0.5 s of audio per 100 ms tick.
+            for (let n = 0; n < 5 && this.buffer.length; n++) {
+                const chunk = this.buffer.shift()!;
+                this.bufferedBytes -= chunk.length;
+                this.sendPcmNow(chunk);
+            }
+            if (this.buffer.length) setTimeout(step, 100);
+            else this.draining = false;
+        };
+        step();
+    }
+
     private scheduleReconnect(): void {
         if (!this.shouldReconnect || this.reconnectTimer) return;
+        this.quickReconnect = false; // a planned quick retry is consumed by any scheduled one
 
         if (this.reconnectAttempts >= RECONNECT_MAX_ATTEMPTS) {
             console.error(`[ElevenLabsStreaming] Max reconnect attempts (${RECONNECT_MAX_ATTEMPTS}) reached — giving up`);

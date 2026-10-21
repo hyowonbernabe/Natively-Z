@@ -69,6 +69,8 @@ export class BrainstormLLM {
      *   then the one it was before evidence was passed in at all.
      */
     async *generateStream(context: string, imagePaths?: string[], diagramTurn?: DiagramTurn | null, problemStatement?: string | null, decisionEvidence?: string | null): AsyncGenerator<string> {
+        // Personal build (Natively Z): transparent prompt (Settings → Intelligence → Prompt); screenshots go as images.
+        if (require('./transparentPrompt').isTransparentPromptOn()) { yield* require('./transparentPrompt').streamTransparent(this.llmHelper, { action: 'brainstorm', request: problemStatement ?? undefined }, imagePaths); return; }
         const problem = problemStatement?.trim() || '';
         if (!context.trim() && !problem && !imagePaths?.length) return;
         try {

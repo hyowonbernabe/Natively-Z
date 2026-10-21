@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useLayoutEffect } from 'react';
 import { LANG_NATIVE_NAMES, useLanguage, useT } from '../i18n';
 import { CalendarSettings } from './settings/CalendarSettings';
+import { ScribeOptionsSection } from './settings/ScribeOptionsSection'; // Personal build (Natively Z)
 import packageJson from '../../package.json';
 import {
     X, Mic, Speaker, Monitor, Keyboard, User, LifeBuoy, LogOut, Upload,
@@ -1489,6 +1490,9 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
             if (b === 'Auto') return 1;
             if (a === 'English') return -1;
             if (b === 'English') return 1;
+            // Personal build (Natively Z): the recommended Taglish option sits right under English.
+            if (a === 'English + Filipino') return -1;
+            if (b === 'English + Filipino') return 1;
             return a.localeCompare(b);
         });
 
@@ -3626,6 +3630,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                                 <p><span className="font-medium text-text-primary">English meetings:</span> choose Local Models and English. Your microphone and system model selections stay saved.</p>
                                                 <p><span className="font-medium text-text-primary">Taglish meetings:</span> choose ElevenLabs Scribe and English + Filipino (Taglish) under Language. Scribe v2 Realtime receives hints for both languages. Requires your ElevenLabs Speech-to-Text API key and uses your account credits.</p>
                                             </div>
+                                            {sttProvider === 'elevenlabs' && <ScribeOptionsSection />}
                                             <div className="bg-bg-card rounded-xl border border-border-subtle p-4 space-y-3">
                                                 <label className="text-xs font-medium text-text-secondary block">{t('Speech Provider')}</label>
                                                 <div className="relative">
@@ -4066,7 +4071,8 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                                     value={displayedSttGroup}
                                                     options={languageGroups.map(g => ({
                                                         deviceId: g,
-                                                        label: g,
+                                                        // Personal build (Natively Z): star the recommended choices.
+                                                        label: g === 'English' || g === 'English + Filipino' ? `★ ${g}` : g,
                                                         kind: 'audioinput' as MediaDeviceKind,
                                                         groupId: '',
                                                         toJSON: () => ({})

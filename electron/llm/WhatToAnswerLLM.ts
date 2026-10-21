@@ -207,6 +207,10 @@ export class WhatToAnswerLLM {
         // Owned by the caller rather than stored on the instance because
         // WhatToAnswerLLM is a long-lived singleton and turns can overlap.
         truncationSink?: { truncated: boolean; reason?: string },
+        // Personal build: a speculative head start (it must not move the EARLIER/NEW split unless adopted).
+        headStart = false,
+        // Personal build: the filler line already on screen; the answer continues from it.
+        alreadySaid?: string,
     ): AsyncGenerator<string> {
         const MEASURE = process.env.MEASURE_LATENCY === 'true';
         let tStart = 0, tIntent = 0, tTemporal = 0, tMode = 0, tTrunc = 0, tPrompt = 0, tStreamStart = 0;
@@ -216,6 +220,40 @@ export class WhatToAnswerLLM {
 
         try {
             if (MEASURE) tStart = performance.now();
+
+            // Personal build (Natively Z): the transparent prompt. Everything sent is what
+            // Settings → Intelligence → Prompt shows; the planner/V3/v2 assembly below is bypassed.
+            if (require('./transparentPrompt').isTransparentPromptOn()) {
+                const screenText = [domContext, screenContext?.ocrText].filter((t): t is string => typeof t === 'string' && t.trim().length > 0).join('\n\n');
+                const tp = require('./transparentPrompt') as typeof import('./transparentPrompt');
+                const builtAt = Date.now();
+                // `cleanedTranscript` carries the question the engine was asked about. It is named under
+                // THE QUESTION only when the transcript doesn't hold it yet (a head start on half-heard speech).
+                const question = String(cleanedTranscript || '').trim();
+                const build = (q: string) => tp.buildTransparentPrompt({ action: 'answer', request: q, instruction: promptInstruction, screenText, alreadySaid });
+                let built = build('');
+                if (question && !built.user.includes(`: ${question}`)) built = build(question);
+                let any = false;
+                try {
+                    const stream = this.llmHelper.streamChatWithOutcome(built.user, imagePaths, undefined, built.system, true, true, ['transcript'], abortSignal);
+                    for await (const token of stream.stream) { any = any || Boolean(token); yield token; }
+                    if (truncationSink && stream.outcome.truncated) {
+                        truncationSink.truncated = true;
+                        truncationSink.reason = stream.outcome.reason;
+                    }
+                } catch (err: any) {
+                    if (abortSignal?.aborted) return;
+                    // The engine shows this and does not store the (partial) answer.
+                    if (truncationSink) {
+                        truncationSink.truncated = true;
+                        truncationSink.reason = `provider_error: ${String(err?.message || err || 'unknown error').slice(0, 200)}`;
+                    }
+                    return;
+                }
+                // A head start draws the line only if the engine adopts it (IntelligenceEngine).
+                if (any && !headStart && !abortSignal?.aborted && !truncationSink?.truncated) tp.markLiveAnswerCutoff(builtAt);
+                return;
+            }
 
             // ── Step 1: Transient context (intent + prior-turn guard) ──────────
             if (MEASURE) tIntent = performance.now();

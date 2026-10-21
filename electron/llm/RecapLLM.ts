@@ -44,6 +44,8 @@ export class RecapLLM {
      * Generate a neutral conversation summary (Streamed)
      */
     async *generateStream(context: string, options?: { contractRule?: string }): AsyncGenerator<string> {
+        // Personal build (Natively Z): transparent prompt (Settings → Intelligence → Prompt).
+        if (require('./transparentPrompt').isTransparentPromptOn()) { yield* require('./transparentPrompt').streamTransparent(this.llmHelper, { action: 'recap' }); return; }
         if (!context.trim()) return;
         try {
             let promptOverride = resolveV2SystemPrompt({ action: 'recap', tier: v2TierForPromptTier(this.llmHelper.getPromptTier()) })

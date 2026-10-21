@@ -10,6 +10,10 @@ export interface AppSettings {
     myContextEnabled?: boolean;
     /** Personal build: main answer length; unset/auto preserves existing defaults. */
     answerLength?: 'auto' | 'brief' | 'balanced' | 'detailed';
+    /** Personal build: how many spoken filler words answers use; unset = natural. */
+    fillerWords?: 'auto' | 'clean' | 'light' | 'natural' | 'heavy';
+    /** Personal build: ElevenLabs Scribe options (see electron/audio/scribeOptions.ts). */
+    scribeOptions?: { clean: boolean; keyterms: boolean; customTerms: string; turnPrediction: boolean };
     /** Personal build: story selection preferences, separate from the context file. */
     myContextStoryPriorities?: Record<string, 'preferred' | 'normal' | 'lower'>;
     /** Personal build: speaking instructions saved independently of personal facts. */

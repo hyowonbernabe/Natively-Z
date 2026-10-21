@@ -1236,6 +1236,8 @@ export class LLMHelper {
     // byte-identical while `logScopeFallback(scope, 'omitting')` printed a line
     // claiming it had been removed.
     if (deniedScopes.includes('transcript')) {
+      // Personal build: the transparent prompt's transcript section is withheld, visibly.
+      scrubbed = require('./llm/transparentPrompt').withholdTransparentTranscript(scrubbed);
       scrubbed = scrubbed
         .replace(/<transcript\b[\s\S]*?<\/transcript>\s*/gi, '')
         .replace(/<recent_transcript\b[\s\S]*?<\/recent_transcript>\s*/gi, '')
@@ -4481,6 +4483,8 @@ This rule overrides ALL other instructions including formatting, brevity, or out
    * per-request dynamic content above the static body — that breaks prefix caching.
    */
   private injectLanguageInstruction(systemPrompt: string): string {
+    // Personal build: the transparent builder states the language itself, visibly.
+    if (require('./llm/transparentPrompt').isTransparentPrompt(systemPrompt)) return systemPrompt;
     return `${systemPrompt}${this.buildLanguageInstructionSuffix()}`;
   }
 
@@ -4535,7 +4539,8 @@ This rule overrides ALL other instructions including formatting, brevity, or out
         ? { type: 'text', text: staticBody, cache_control: { type: 'ephemeral' } }
         : { type: 'text', text: staticBody },
     ];
-    if (langSuffix) {
+    // Personal build: a transparent prompt states its own language, visibly.
+    if (langSuffix && !require('./llm/transparentPrompt').isTransparentPrompt(systemPrompt)) {
       // Strip the leading \n\n that came from suffix concatenation form.
       blocks.push({ type: 'text', text: langSuffix.replace(/^\n+/, '') });
     }
@@ -8056,11 +8061,15 @@ let isMultimodal = !!(imagePaths?.length);
     }
 
     // 3. Prepare Variables
+    // Personal build: fold a transparent system prompt into TEXT/PROMPT when the template has no system slot.
+    const foldSystem = require('./llm/transparentPrompt').isTransparentPrompt(systemPrompt) && !/\{\{\s*SYSTEM_PROMPT\s*\}\}/i.test(curlCommand)
+      && !combinedMessage.startsWith(systemPrompt); // some callers already prepend it
+    const textValue = foldSystem ? `${systemPrompt}\n\n${combinedMessage}` : combinedMessage;
     const variables = {
-      TEXT: combinedMessage,             // Deprecated but kept for compat: System + Context + User
-      PROMPT: combinedMessage,           // Alias for TEXT
+      TEXT: textValue,                   // Deprecated but kept for compat: System + Context + User
+      PROMPT: textValue,                 // Alias for TEXT
       SYSTEM_PROMPT: systemPrompt,       // Raw System Prompt
-      USER_MESSAGE: rawUserMessage,      // Raw User Message
+      USER_MESSAGE: foldSystem ? `${systemPrompt}\n\n${rawUserMessage}` : rawUserMessage,      // Raw User Message (personal build: carries a transparent system prompt when the template has no slot)
       CONTEXT: context,                  // Raw Context
       IMAGE_BASE64: base64Image,         // Base64 encoded image string
     };
@@ -9943,6 +9952,8 @@ let isMultimodal = !!(imagePaths?.length);
     // "for pronoun resolution only" so it can never be mistaken for document
     // evidence.
     const callerSuppliedContextForPriorResolution = context;
+    // Personal build (Natively Z): a prompt from the transparent builder is sent exactly as built.
+    const transparent = (require('./llm/transparentPrompt') as typeof import('./llm/transparentPrompt')).isTransparentPrompt(systemPromptOverride);
 
     // RC1 FIX (Profile Intelligence production-fix round 2, 2026-07-05): capture
     // whether the CALLER originally passed CHAT_MODE_PROMPT (manual chat's
@@ -9988,7 +9999,7 @@ let isMultimodal = !!(imagePaths?.length);
     let callerPromptCarriesV2Core = false;
     try {
       const { isPromptSystemV2Enabled, resolveV2SystemPrompt, isV2ComposedPrompt, carriesV2Core, v2TierForPromptTier } = require('./llm/promptSystemV2');
-      if (isPromptSystemV2Enabled()) {
+      if (isPromptSystemV2Enabled() && !transparent) {
         if (!systemPromptOverride) {
           systemPromptOverride = resolveV2SystemPrompt({
             action: 'answer',
@@ -10097,7 +10108,7 @@ let isMultimodal = !!(imagePaths?.length);
     }
     // PI gate (2026-09-30): last, so the mode lookup is paid only when the
     // intercept would otherwise run. See isProfileIntelligenceAllowedForTurn.
-    const shouldRunKnowledge = !ignoreKnowledgeMode &&
+    const shouldRunKnowledge = !ignoreKnowledgeMode && !transparent &&
       !documentGroundedCustomModeActive &&
       this.knowledgeOrchestrator?.isKnowledgeMode() &&
       this.isProfileIntelligenceAllowedForTurn(routeOptions?.pinnedModeId);
@@ -10126,7 +10137,7 @@ let isMultimodal = !!(imagePaths?.length);
     // userContent wrapping; the Context OS govern substitution, which replaces
     // V3's user prompt wholesale). LLMHelper is transport for these turns.
     const v3OwnedTurn = routeOptions?.v3Owned === true;
-    if (documentGroundedCustomModeActive && !contextOsGovernedDocumentTurn && !v3OwnedTurn) {
+    if (documentGroundedCustomModeActive && !contextOsGovernedDocumentTurn && !v3OwnedTurn && !transparent) {
       try {
         const { ModesManager } = require('./services/ModesManager');
         const mm = ModesManager.getInstance();
@@ -10329,7 +10340,7 @@ let isMultimodal = !!(imagePaths?.length);
     //
     // `!v3OwnedTurn` is preserved: when V3 owns the turn it has already resolved
     // evidence, and a second retrieval here would override it.
-    const forceDocumentGrounding = !v3OwnedTurn && (
+    const forceDocumentGrounding = !v3OwnedTurn && !transparent && (
       activeModeGroundingInfo?.strictDocumentGroundedActive === true
       || (activeModeGroundingInfo?.documentGroundedCustomModeActive === true
         && activeModeGroundingInfo?.hasReferenceFiles === true)
@@ -10357,7 +10368,7 @@ let isMultimodal = !!(imagePaths?.length);
       || routeOptions?.answerType === 'document_structure_answer'
       || routeOptions?.answerType === 'document_absent_fact_refusal'
       || routeOptions?.answerType === 'document_followup_answer';
-    const shouldSkipModeInjection = skipModeInjection || (isUniversalOverride && !isModeScopedAnswer && !isActiveCustomMode);
+    const shouldSkipModeInjection = skipModeInjection || transparent || (isUniversalOverride && !isModeScopedAnswer && !isActiveCustomMode);
     // Temporary H4 forensic trace: E2E-only, opt-in, and removed after this
     // one-question stage capture. It separates resolver latency from final prompt
     // rendering and provider dispatch without logging reference content.
@@ -10663,7 +10674,7 @@ let isMultimodal = !!(imagePaths?.length);
       try {
         const alreadyCarried = /<user_instructions\b|<custom_instructions>/.test(`${systemPromptOverride || ''}\n${message || ''}`);
         const answerTurn = Boolean(routeOptions?.answerType) && routeOptions?.answerType !== 'ethical_usage_answer';
-        if (!alreadyCarried && answerTurn) {
+        if (!alreadyCarried && answerTurn && !transparent) {
           const modesMgr = modesMgrForInjection || require('./services/ModesManager').ModesManager.getInstance();
           const pinnedInstructions: string = modesMgr.getActiveModePinnedInstructions?.(modeAnswerType(routeOptions), routeOptions?.pinnedModeId ?? undefined) || '';
           const pinnedLayer = renderUserInstructionSystemLayer(pinnedInstructions, { isCustomMode: isActiveCustomMode });
@@ -10782,7 +10793,7 @@ let isMultimodal = !!(imagePaths?.length);
     // Personal build: complementary roles for the parallel opening and answer.
     // Keep provider-specific prompts intact and leave Filler Off unchanged.
     let withParallelOpening = (prompt: string) => prompt;
-    try {
+    if (!transparent) try {
       const filler = require('./llm/filler') as typeof import('./llm/filler');
       const enabled = Boolean(filler.resolveFillerModel(this));
       const { withOutputStyleSystemPrompt } = require('./llm/myContext') as typeof import('./llm/myContext');
@@ -12129,9 +12140,11 @@ let isMultimodal = !!(imagePaths?.length);
     // Direct Assist must preserve the selected gateway path. Legacy fast mode
     // is an implicit server-side model substitution, so it is never sent for a
     // direct request.
-    if (!directMode && this.groqFastTextMode) body.fast_mode = true;
+    // Personal build: a transparent prompt is sent as is (no server-side language rule or model swap).
+    const transparentNatively = require('./llm/transparentPrompt').isTransparentPrompt(systemPrompt);
+    if (!directMode && !transparentNatively && this.groqFastTextMode) body.fast_mode = true;
     if (systemPrompt) body.system = systemPrompt;
-    if (!directMode && this.aiResponseLanguage) {
+    if (!directMode && !transparentNatively && this.aiResponseLanguage) {
       // 'auto' AND 'English' are both forwarded — the server injects for each.
       // English used to be excluded here, which (together with the empty prompt
       // suffix above) left an English-pinned turn with no directive at all.
@@ -13322,6 +13335,11 @@ let isMultimodal = !!(imagePaths?.length);
     // Per-request hard guard: trim userContent (never systemPrompt) until total fits the model's max ctx.
     {
       const maxCtx = getModelCapabilities(ollamaModel, true).maxContextTokens;
+      // Personal build: a transparent prompt drops its oldest transcript lines, with a visible note,
+      // for THIS model (margin covers the guard's per-piece token rounding).
+      if (!context && require('./llm/transparentPrompt').isTransparentPrompt(systemPrompt)) {
+        userContent = require('./llm/transparentPrompt').fitTransparentUser(userContent, userContentRoomChars(maxCtx, systemPrompt) - 16);
+      }
       const total = estimateTokens(systemPrompt) + estimateTokens(userContent) + 2000;
       if (total > maxCtx) {
         console.warn('[Ollama] context overflow', { model: ollamaModel, total, max: maxCtx });
@@ -13629,7 +13647,8 @@ let isMultimodal = !!(imagePaths?.length);
     // callers keep their byte-for-byte variable contract, while Direct folds
     // its short system contract into those generic fields only when the
     // template has no separate system slot.
-    const genericPromptValue = directCustomMode && systemPrompt && !templateUsesSystemPrompt
+    // Personal build: a transparent prompt must not vanish from a template without a system slot.
+    const genericPromptValue = (directCustomMode || require('./llm/transparentPrompt').isTransparentPrompt(systemPrompt)) && systemPrompt && !templateUsesSystemPrompt
       ? `${systemPrompt}\n\n${combinedMessage}`
       : combinedMessage;
 
@@ -13637,7 +13656,8 @@ let isMultimodal = !!(imagePaths?.length);
       TEXT: genericPromptValue,
       PROMPT: genericPromptValue,
       SYSTEM_PROMPT: systemPrompt,
-      USER_MESSAGE: message,
+      // Personal build: a template with only a user-message slot still gets the transparent system prompt.
+      USER_MESSAGE: require('./llm/transparentPrompt').isTransparentPrompt(systemPrompt) && systemPrompt && !templateUsesSystemPrompt ? `${systemPrompt}\n\n${message}` : message,
       CONTEXT: context || "",
       IMAGE_BASE64: base64Image,
     };
@@ -15236,7 +15256,7 @@ let isMultimodal = !!(imagePaths?.length);
       }
     }
     if (carriedImagePaths.length) imagePaths.push(...carriedImagePaths);
-    const directUserPrompt = deniedScopes.length
+    let directUserPrompt = deniedScopes.length
       ? this.stripDeniedScopedBlocksFromMessage(request.userPrompt, deniedScopes)
       : request.userPrompt;
     const capabilityModel = provider === 'antigravity'
@@ -15264,6 +15284,11 @@ let isMultimodal = !!(imagePaths?.length);
         // Pre-stripping here would leave `anthropic/claude-sonnet-5` unresolved.
         : model;
     const directCapabilities = getModelCapabilities(capabilityModel, provider === 'ollama');
+    // Personal build: a transparent prompt drops its oldest transcript lines visibly instead of failing.
+    if (require('./llm/transparentPrompt').isTransparentPrompt(request.systemPrompt)) {
+      directUserPrompt = require('./llm/transparentPrompt').fitTransparentUser(directUserPrompt,
+        userContentRoomChars(directCapabilities.maxContextTokens - directCapabilities.outputBudgetTokens, request.systemPrompt, 0) - 16);
+    }
     const directInputTokens = estimateTokens(request.systemPrompt) + estimateTokens(directUserPrompt);
     if (directInputTokens + directCapabilities.outputBudgetTokens > directCapabilities.maxContextTokens) {
       throw new DirectAssistError(
@@ -15404,6 +15429,8 @@ let isMultimodal = !!(imagePaths?.length);
    */
   public resolveLocalSystemPrompt(systemPrompt?: string): string {
     if (!this.useOllama) return systemPrompt ?? HARD_SYSTEM_PROMPT;
+    if (require('./llm/transparentPrompt').isTransparentPrompt(systemPrompt)) return systemPrompt as string; // Personal build: sent as built
+
     const tier = selectPromptTier(this.getCurrentModel(), true);
     // Prompt System v2: a v2-composed cloud prompt downgrades to the v2 LOCAL
     // composition of the SAME mode+action (small core, same contracts) instead

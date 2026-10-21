@@ -796,9 +796,18 @@ export interface ElectronAPI {
   getStoryPriorities: () => Promise<{ stories: string[]; priorities: import('../../electron/llm/myContext').StoryPriorities }>;
   setStoryPriorities: (priorities: import('../../electron/llm/myContext').StoryPriorities) => Promise<{ stories: string[]; priorities: import('../../electron/llm/myContext').StoryPriorities }>;
   getAnswerLength: () => Promise<import('../../electron/llm/answerLength').AnswerLength>;
+  getFillerWords: () => Promise<import('../../electron/llm/fillerWords').FillerWords>;
+  getScribeOptions: () => Promise<{ settings: import('../../electron/audio/scribeOptions').ScribeSettings; terms: string[] }>;
+  setScribeOptions: (settings: import('../../electron/audio/scribeOptions').ScribeSettings) => Promise<{ settings: import('../../electron/audio/scribeOptions').ScribeSettings; terms: string[] }>;
+  setFillerWords: (value: import('../../electron/llm/fillerWords').FillerWords) => Promise<import('../../electron/llm/fillerWords').FillerWords>;
+  onFillerWordsChanged: (callback: (value: import('../../electron/llm/fillerWords').FillerWords) => void) => () => void;
   setAnswerLength: (length: import('../../electron/llm/answerLength').AnswerLength) => Promise<import('../../electron/llm/answerLength').AnswerLength>;
   onAnswerLengthChanged: (callback: (length: import('../../electron/llm/answerLength').AnswerLength) => void) => () => void;
   getOutputStyle: () => Promise<import('../../electron/llm/myContext').OutputStyleConfig>
+  getPromptSettings: () => Promise<import('../../electron/llm/transparentPrompt').PromptSettingsPayload>
+  setPromptSettings: (settings: import('../../electron/llm/transparentPrompt').PromptSettings) => Promise<import('../../electron/llm/transparentPrompt').PromptSettingsPayload>
+  resetPromptSettings: () => Promise<import('../../electron/llm/transparentPrompt').PromptSettingsPayload>
+  getLastPrompts: () => Promise<import('../../electron/llm/transparentPrompt').LastPrompt[]>
   setOutputStyle: (config: import('../../electron/llm/myContext').OutputStyleConfig) => Promise<import('../../electron/llm/myContext').OutputStyleConfig>
   getMockInterview: () => Promise<import('../../electron/services/mock-interview/types').InterviewState>
   getMockInterviewHistory: () => Promise<import('../../electron/services/mock-interview/types').InterviewSession[]>

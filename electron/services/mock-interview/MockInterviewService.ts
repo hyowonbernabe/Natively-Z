@@ -16,6 +16,8 @@ export interface InterviewDependencies {
     finalizeMicrophone: () => void;
     speak: (text: string, signal: AbortSignal) => Promise<void>;
     cancelSpeech: () => void;
+    /** Personal build: the question also goes into the live meeting as the interviewer's line. */
+    noteQuestion?: (text: string) => void;
     voice: () => string;
     now?: () => number;
 }
@@ -143,6 +145,7 @@ export class MockInterviewService extends EventEmitter {
         const question = await this.generate(prompt.system, prompt.user, 1200);
         if (signal.aborted || session !== this.state.session || session.status !== 'active') return;
         session.turns.push({ speaker: 'interviewer', text: question, timestamp: this.now() });
+        try { this.deps.noteQuestion?.(question); } catch { /* the interview continues */ }
         this.save();
         await this.playQuestion(question);
     }
@@ -320,6 +323,12 @@ export class MockInterviewService extends EventEmitter {
     }
 
     async stop(): Promise<InterviewState> {
+        // Personal build: closing or stopping while feedback is being written keeps it; it saves when done.
+        if (this.reviewing) return this.snapshot();
+        return this.endSession();
+    }
+
+    private async endSession(): Promise<InterviewState> {
         this.controller.abort();
         this.deps.cancelSpeech();
         let saveError: unknown;
@@ -344,7 +353,7 @@ export class MockInterviewService extends EventEmitter {
         if (this.state.session.feedback || this.reviewing) return this.snapshot();
         this.reviewing = true;
         try {
-            await this.stop();
+            await this.endSession();
             this.controller = new AbortController();
             const session = this.state.session;
             const signal = this.controller.signal;

@@ -1,4 +1,4 @@
-import { AnswerLengthControl } from './settings/AnswerLengthControl';
+import { AnswerLengthControl, FillerWordsControl } from './settings/AnswerLengthControl';
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { MessageSquare, Camera, Zap, Eye } from 'lucide-react';
 import { useShortcuts } from '../hooks/useShortcuts';
@@ -474,6 +474,7 @@ const SettingsPopup = () => {
                     })}
 
                     <AnswerLengthControl compact dark={isDarkBg} />
+                    <FillerWordsControl compact dark={isDarkBg} />
 
                     {/* Interview Mode = the Brainstorm action button. */}
                     {renderToggleRow({

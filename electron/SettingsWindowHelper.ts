@@ -2,6 +2,7 @@ import { BrowserWindow, screen, app } from "electron"
 import { WindowHelper } from "./WindowHelper"
 import path from "node:path"
 import { attachNoActivate } from "./utils/windowsFocusPolicy"
+import { refreshPopoverOwner } from "./utils/popoverOwner"
 import { setVisibleOnAllWorkspacesKeepingDock } from "./utils/macDockPolicy"
 import { DEV_SERVER_URL } from './devServerUrl';
 
@@ -156,6 +157,8 @@ export class SettingsWindowHelper {
             if (activate) this.settingsWindow.show(); else this.settingsWindow.showInactive();
             if (activate) this.settingsWindow.focus();
         }
+        // Personal build: Windows-only, keeps the popover's buttons clickable (utils/popoverOwner.ts).
+        refreshPopoverOwner(this.settingsWindow, mainWin);
 
         this.emitVisibilityChange(true);
 

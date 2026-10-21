@@ -6,6 +6,7 @@ import React, { useEffect, useState } from 'react';
 import { SETTINGS_BTN, SettingsRow, SettingsSectionHeading, SettingsSwitch } from './SettingsRow';
 import type { StoryPriorities, StoryPriority } from '../../../electron/llm/myContext';
 import { OutputStyleSection } from './OutputStyleSection';
+import { PromptSection } from './PromptSection';
 
 type Status = { path: string | null; enabled: boolean; exists: boolean; chars: number };
 
@@ -94,6 +95,7 @@ export const MyContextSection: React.FC = () => {
       <div className="mt-3 flex items-center gap-3"><button type="button" className={SETTINGS_BTN} disabled={!dirty || saving} onClick={() => { void savePriorities(); }}>{saving ? 'Saving?' : 'Save priorities'}</button><span className="text-xs text-text-secondary" role="status">{message || (dirty ? 'Unsaved changes' : '')}</span></div>
     </section>
     <OutputStyleSection />
+    <PromptSection />
     </>
   );
 };

@@ -1,6 +1,7 @@
 import { BrowserWindow, screen, app } from "electron"
 import path from "node:path"
 import { attachNoActivate } from "./utils/windowsFocusPolicy"
+import { refreshPopoverOwner } from "./utils/popoverOwner"
 import { setVisibleOnAllWorkspacesKeepingDock } from "./utils/macDockPolicy"
 import { modelSelectorHeightBudget } from "./utils/modelSelectorHeightBudget"
 import { allowRespawn, hasLiveRenderer, onRendererGone } from "./utils/rendererLiveness"
@@ -134,6 +135,8 @@ export class ModelSelectorWindowHelper {
             if (activate) this.window.show(); else this.window.showInactive();
             if (activate) this.window.focus();
         }
+        // Personal build: Windows-only, keeps the popover's rows clickable (utils/popoverOwner.ts).
+        refreshPopoverOwner(this.window, mainWin);
         // Arm the click-outside catcher AFTER the show, as the settings
         // dropdown does. The catcher re-raises Natively's visible windows
         // above itself (it has no window level to rely on outside macOS);
